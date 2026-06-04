@@ -141,6 +141,8 @@ def load_data():
     shots    = []
     touches  = []
     def_acts = []
+    net_edges = []   # pass-network: {passer, recipient, season, x, y}
+    net_pos   = []   # per-event positions for avg position node placement
 
     for fpath in files:
         fname  = os.path.basename(fpath)
@@ -155,6 +157,37 @@ def load_data():
         if not any(e.get("playerName") == "B. Mead" for e in events):
             continue
 
+        # Arsenal's contestant ID for this file
+        arsenal_id = next(
+            e["contestantId"] for e in events if e.get("playerName") == "B. Mead"
+        )
+
+        # ── pass network: all successful Arsenal passes ─────────────────────
+        event_idx = {e["id"]: i for i, e in enumerate(events)}
+        for i, e in enumerate(events):
+            if (e.get("contestantId") != arsenal_id
+                    or e.get("typeId") != 1
+                    or e.get("outcome") != 1):
+                continue
+            passer = e.get("playerName")
+            px, py = e.get("x"), e.get("y")
+            if not passer or px is None:
+                continue
+            # recipient = first subsequent event by same team
+            for j in range(i + 1, min(i + 6, len(events))):
+                ne = events[j]
+                if ne.get("contestantId") == arsenal_id and ne.get("playerName"):
+                    recipient = ne["playerName"]
+                    if recipient != passer:
+                        net_edges.append({
+                            "passer": passer, "recipient": recipient,
+                            "season": season,
+                        })
+                    break
+            # store position for average-position node
+            net_pos.append({"player": passer, "x": px, "y": py, "season": season})
+
+        # ── Beth Mead events ────────────────────────────────────────────────
         for e in events:
             if e.get("playerName") != "B. Mead":
                 continue
@@ -168,7 +201,6 @@ def load_data():
 
             base_rec = dict(x=x, y=y, season=season, outcome=outcome, period=period)
 
-            # passes
             if tid == 1:
                 ex = get_qualifier(e, 140)
                 ey = get_qualifier(e, 141)
@@ -180,23 +212,19 @@ def load_data():
                 passes.append({**base_rec,
                     "end_x": end_x, "end_y": end_y,
                     "key_pass": is_key, "progressive": is_prog})
-
-            # shots (13=off, 14=post, 15=saved, 16=goal)
             elif tid in (13, 14, 15, 16):
                 shots.append({**base_rec, "type_id": tid})
 
-            # defensive actions
             if tid in (7, 8, 12, 74):
                 label_map = {7: "Tackle", 8: "Interception", 12: "Clearance", 74: "Block"}
                 def_acts.append({**base_rec, "action": label_map[tid]})
 
-            # all actions for heat / territory
             touches.append(base_rec)
 
-    return passes, shots, touches, def_acts
+    return passes, shots, touches, def_acts, net_edges, net_pos
 
 
-passes, shots, touches, def_acts = load_data()
+passes, shots, touches, def_acts, net_edges, net_pos = load_data()
 seasons_available = sorted(set(p["season"] for p in passes))
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -366,10 +394,11 @@ tabs = st.tabs([
     "🥅  Shot Map",
     "🔥  Heat Map",
     "🗺  Territory",
+    "🔗  Pass Network",
     "🛡  Defensive",
     "📊  Percentile",
 ])
-tab_pass, tab_shot, tab_heat, tab_terr, tab_def, tab_perc = tabs
+tab_pass, tab_shot, tab_heat, tab_terr, tab_net, tab_def, tab_perc = tabs
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 1 – PASS MAP
@@ -546,7 +575,139 @@ with tab_terr:
     plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 5 – DEFENSIVE ACTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 5 – PASS NETWORK
+# ═══════════════════════════════════════════════════════════════════════════════
+
+with tab_net:
+    fp = f_passes(passes)
+    fs = f_shots(shots)
+    fd = f_def(def_acts)
+    metric_row(fp, fs, fd)
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── filter by selected seasons ────────────────────────────────────────
+    edges_f = [e for e in net_edges if e["season"] in selected_seasons]
+    pos_f   = [p for p in net_pos   if p["season"] in selected_seasons]
+
+    if not edges_f:
+        st.info("No pass network data for the selected season(s).")
+    else:
+        from collections import defaultdict, Counter
+        import numpy as np
+
+        # Average position per player
+        avg_pos = defaultdict(lambda: {"x": [], "y": []})
+        for p in pos_f:
+            avg_pos[p["player"]]["x"].append(p["x"])
+            avg_pos[p["player"]]["y"].append(p["y"])
+        avg_pos = {
+            pl: (np.mean(v["x"]), np.mean(v["y"]))
+            for pl, v in avg_pos.items()
+        }
+
+        # Pass counts: directional edge → combine both directions
+        pair_counts = Counter()
+        for e in edges_f:
+            pair = tuple(sorted([e["passer"], e["recipient"]]))
+            pair_counts[pair] += 1
+
+        # Per-player total passes (for node size)
+        player_pass_count = Counter()
+        for e in edges_f:
+            player_pass_count[e["passer"]] += 1
+
+        # Keep only players who appear in avg_pos
+        players = [p for p in avg_pos if player_pass_count[p] > 0]
+
+        # Min edge count threshold (top connections only to avoid clutter)
+        min_edge = max(2, int(np.percentile(list(pair_counts.values()), 30)))
+
+        # ── draw ──────────────────────────────────────────────────────────
+        pitch = Pitch(
+            pitch_type="opta", pitch_color=PITCH_BG, line_color="#2d333b",
+            linewidth=0.8, goal_type="box", line_zorder=1,
+        )
+        fig, ax = pitch.draw(figsize=(16, 10))
+        fig.patch.set_facecolor(FIG_BG)
+
+        max_edge_cnt = max(pair_counts.values()) if pair_counts else 1
+        max_node_cnt = max(player_pass_count[p] for p in players) if players else 1
+
+        # ── edges ─────────────────────────────────────────────────────────
+        for (p1, p2), cnt in pair_counts.items():
+            if cnt < min_edge:
+                continue
+            if p1 not in avg_pos or p2 not in avg_pos:
+                continue
+            x1, y1 = avg_pos[p1]
+            x2, y2 = avg_pos[p2]
+            width  = 0.8 + 5.0 * (cnt / max_edge_cnt)
+            alpha  = 0.25 + 0.55 * (cnt / max_edge_cnt)
+            is_mead_edge = "B. Mead" in (p1, p2)
+            color  = ACCENT_BLUE if is_mead_edge else "#484f58"
+            ax.plot([x1, x2], [y1, y2],
+                    color=color, linewidth=width, alpha=alpha,
+                    solid_capstyle="round", zorder=2)
+
+        # ── nodes ─────────────────────────────────────────────────────────
+        for pl in players:
+            if pl not in avg_pos:
+                continue
+            x, y   = avg_pos[pl]
+            cnt    = player_pass_count[pl]
+            is_mead = pl == "B. Mead"
+            size   = 100 + 700 * (cnt / max_node_cnt)
+            color  = ACCENT_YLW if is_mead else "#c9d1d9"
+            edge_c = "#0d1117"
+            lw     = 2.5 if is_mead else 1.0
+
+            ax.scatter(x, y, s=size, c=color, zorder=4,
+                       edgecolors=edge_c, linewidths=lw)
+
+            # label
+            label = pl.split(". ")[-1] if ". " in pl else pl
+            fontsize  = 9.5 if is_mead else 7.5
+            fontweight = "bold" if is_mead else "normal"
+            fcolor     = ACCENT_YLW if is_mead else "#e6edf3"
+
+            # offset label so it doesn't sit on top of node
+            ax.text(x, y + 3.5, label,
+                    ha="center", va="bottom",
+                    fontsize=fontsize, fontweight=fontweight,
+                    color=fcolor, zorder=5,
+                    bbox=dict(boxstyle="round,pad=0.2",
+                              facecolor="#0d1117", alpha=0.6,
+                              edgecolor="none"))
+
+        # ── legend ────────────────────────────────────────────────────────
+        legend(ax, [
+            (ACCENT_YLW,  "B. Mead"),
+            ("#c9d1d9",   "Teammate"),
+            (ACCENT_BLUE, "Mead connection"),
+            ("#484f58",   "Other connection"),
+        ])
+
+        # subtitle stats
+        top_partner = max(
+            [(p, c) for (p1, p2), c in pair_counts.items()
+             for p in ([p1] if p2 == "B. Mead" else ([p2] if p1 == "B. Mead" else []))],
+            key=lambda x: x[1], default=("—", 0)
+        )
+        total_mead_passes = sum(
+            c for (p1, p2), c in pair_counts.items() if "B. Mead" in (p1, p2)
+        )
+
+        add_title(
+            fig, "Pass Network  ·  B. Mead",
+            f"{season_label()}  ·  Node size = passes played  ·  "
+            f"Edge width = pass volume  ·  Top partner: {top_partner[0]} ({top_partner[1]})"
+        )
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
+
+# TAB 6 – DEFENSIVE ACTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab_def:
