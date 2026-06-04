@@ -388,12 +388,13 @@ st.markdown(f"""
 
 (tab_pass, tab_shot, tab_heat, tab_terr, tab_net, tab_sonar,
  tab_drib, tab_cross, tab_szones, tab_career, tab_match,
- tab_radar, tab_style, tab_compare, tab_oppo, tab_def, tab_perc) = st.tabs([
+ tab_radar, tab_style, tab_compare, tab_oppo, tab_arch,
+ tab_def, tab_perc) = st.tabs([
     "🎯 Pass Map",    "🥅 Shot Map",    "🔥 Heat Map",    "🗺 Territory",
     "🔗 Pass Network","🧭 Pass Sonars", "🏃 Dribbles",    "↗️ Crossings",
     "🎯 Shot Zones",  "📈 Career",      "📅 Match Stats", "🍕 Radar",
-    "📏 Style",       "🔄 Season Compare","🆚 Opposition", "🛡 Defensive",
-    "📊 Percentile",
+    "📏 Style",       "🔄 Season Compare","🆚 Opposition", "🧬 Archetypes",
+    "🛡 Defensive",   "📊 Percentile",
 ])
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -980,7 +981,219 @@ with tab_oppo:
         plt.tight_layout(); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 16 – DEFENSIVE ACTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+# 16 – ARCHETYPES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Six forward/winger archetypes, each defined by weighted metric keys.
+ARCHETYPES = {
+    "⚽ Goal Scorer":       {"goals":3,      "shots":2,         "shot_acc":2,    "dribbles":1},
+    "🎨 Creative Playmaker":{"key_passes":3, "progressive":2,   "pass_acc":2,    "goals":1},
+    "🏃 Dynamic Dribbler":  {"dribbles":3,   "drib_success":2,  "shots":1,       "key_passes":1},
+    "↗️ Wide Creator":      {"crosses":3,    "key_passes":2,    "progressive":2, "pass_acc":1},
+    "🔥 Pressing Winger":   {"tackles":3,    "interceptions":2, "dribbles":1,    "shots":1},
+    "🎯 Box Threat":        {"shots":3,      "goals":2,         "shot_acc":2,    "dribbles":1},
+}
+
+ARCH_COLORS = {
+    "⚽ Goal Scorer":        C_YELLOW,
+    "🎨 Creative Playmaker": C_BLUE,
+    "🏃 Dynamic Dribbler":   C_GREEN,
+    "↗️ Wide Creator":       C_PURPLE,
+    "🔥 Pressing Winger":    C_ORANGE,
+    "🎯 Box Threat":         "#ff6e96",
+}
+
+with tab_arch:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+
+    st.markdown(
+        "<div style='font-size:12px;color:#8b949e;margin-bottom:16px'>"
+        "Each archetype is scored from Mead's season stats (normalised to career best). "
+        "The dominant archetype per season is highlighted. "
+        "All seasons shown regardless of sidebar season filter.</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── build per-season stat dict ────────────────────────────────────────
+    arch_data = {}
+    for s in seasons_available:
+        sp  = [p for p in passes   if p["season"]==s]
+        ss  = [sh for sh in shots  if sh["season"]==s]
+        sd  = [d  for d  in def_acts if d["season"]==s]
+        sdr = [d  for d  in dribbles if d["season"]==s]
+        scr = [p  for p  in sp if (p["y"]<25 or p["y"]>75) and p["end_x"]>67]
+        tp  = len(sp); ts = len(ss); tdr = len(sdr)
+        arch_data[s] = {
+            "goals":        sum(1 for sh in ss if sh["type_id"]==16),
+            "shots":        ts,
+            "shot_acc":     round(sum(1 for sh in ss if sh["type_id"] in (15,16))/ts*100,1) if ts else 0,
+            "key_passes":   sum(1 for p in sp if p["key_pass"]),
+            "progressive":  sum(1 for p in sp if p["progressive"]),
+            "pass_acc":     round(sum(1 for p in sp if p["outcome"]==1)/tp*100,1) if tp else 0,
+            "dribbles":     tdr,
+            "drib_success": round(sum(1 for d in sdr if d["outcome"]==1)/tdr*100,1) if tdr else 0,
+            "crosses":      len(scr),
+            "tackles":      sum(1 for d in sd if d["action"]=="Tackle"),
+            "interceptions":sum(1 for d in sd if d["action"]=="Interception"),
+        }
+
+    # normalise each raw metric to 0-100 across all seasons
+    all_metric_keys = list(next(iter(arch_data.values())).keys())
+    max_m = {m: max(arch_data[s][m] for s in seasons_available) or 1 for m in all_metric_keys}
+    norm  = {s: {m: arch_data[s][m]/max_m[m]*100 for m in all_metric_keys} for s in seasons_available}
+
+    # score each season vs each archetype
+    def arch_score(season_norm, weights):
+        total_w = sum(weights.values())
+        return sum(season_norm[m]*w for m,w in weights.items()) / total_w
+
+    scores = {}  # scores[season][archetype] = 0-100
+    for s in seasons_available:
+        scores[s] = {a: arch_score(norm[s], w) for a,w in ARCHETYPES.items()}
+
+    dominant = {s: max(scores[s], key=scores[s].get) for s in seasons_available}
+
+    # ── TOP SECTION: archetype summary cards ─────────────────────────────
+    st.markdown("### Dominant Archetype per Season")
+    cols = st.columns(min(len(seasons_available), 6))
+    for i, s in enumerate(seasons_available):
+        col = cols[i % len(cols)]
+        dom = dominant[s]
+        color = ARCH_COLORS[dom]
+        col.markdown(
+            f"<div style='background:#161b22;border:1px solid {color};"
+            f"border-radius:8px;padding:12px 10px;text-align:center;margin-bottom:8px'>"
+            f"<div style='font-size:10px;color:#8b949e;text-transform:uppercase;"
+            f"letter-spacing:.06em'>{s.replace('WSL ','')}</div>"
+            f"<div style='font-size:18px;margin:4px 0'>{dom.split()[0]}</div>"
+            f"<div style='font-size:11px;font-weight:700;color:{color}'>"
+            f"{' '.join(dom.split()[1:])}</div>"
+            f"<div style='font-size:10px;color:#484f58;margin-top:4px'>"
+            f"score {scores[s][dom]:.0f}/100</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── MAIN CHART: stacked radar comparison across all archetypes ────────
+    st.markdown("### Archetype Score Breakdown — All Seasons")
+
+    fig, axes = plt.subplots(
+        2, 3, figsize=(16, 9),
+        subplot_kw={"projection": "polar"},
+        facecolor=FIG_BG,
+    )
+    fig.patch.set_facecolor(FIG_BG)
+
+    for ax, (arch_name, weights) in zip(axes.flat, ARCHETYPES.items()):
+        ax.set_facecolor("#161b22")
+        color = ARCH_COLORS[arch_name]
+        slabels = [s.replace("WSL ","") for s in seasons_available]
+        N = len(seasons_available)
+        angles = np.linspace(0, 2*np.pi, N, endpoint=False).tolist()
+        angles += [angles[0]]
+        vals   = [scores[s][arch_name] for s in seasons_available]
+        vals  += [vals[0]]
+
+        # background rings
+        for r in [25, 50, 75, 100]:
+            ax.plot(angles, [r]*len(angles), color="#30363d", linewidth=.4)
+        ax.fill(angles, [100]*len(angles), color="#21262d", alpha=.4)
+        ax.plot(angles, vals, color=color, linewidth=2.2, zorder=3)
+        ax.fill(angles, vals, color=color, alpha=.20, zorder=2)
+        ax.scatter(angles[:-1], vals[:-1], s=50, color=color,
+                   zorder=5, edgecolors=FIG_BG, linewidths=1.5)
+
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(slabels, color="#8b949e", fontsize=6.5)
+        ax.set_yticks([]); ax.set_ylim(0, 115)
+        ax.spines["polar"].set_color("#30363d"); ax.grid(False)
+        ax.set_theta_zero_location("N"); ax.set_theta_direction(-1)
+        ax.set_title(arch_name, color=color, fontsize=10,
+                     fontweight="700", pad=10)
+        # mark the dominant seasons
+        for i, s in enumerate(seasons_available):
+            if dominant[s] == arch_name:
+                ax.scatter([angles[i]], [vals[i]], s=120, color=color,
+                           zorder=6, edgecolors="white", linewidths=1.5,
+                           marker="*")
+
+    fig.suptitle("Archetype Radars  ·  B. Mead  ·  ★ = dominant season",
+                 color="#e6edf3", fontsize=13, fontweight="800", y=.99)
+    plt.tight_layout(rect=[0,0,1,.97])
+    st.pyplot(fig, width="stretch"); plt.close(fig)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── HEATMAP: season × archetype score grid ────────────────────────────
+    st.markdown("### Season × Archetype Score Matrix")
+    arch_names  = list(ARCHETYPES.keys())
+    matrix      = np.array([[scores[s][a] for a in arch_names] for s in seasons_available])
+    slabels_short = [s.replace("WSL ","") for s in seasons_available]
+
+    fig2, ax2 = plt.subplots(figsize=(14, max(4, len(seasons_available)*0.55+1.5)),
+                              facecolor=FIG_BG)
+    ax2.set_facecolor(FIG_BG)
+    cmap_m = LinearSegmentedColormap.from_list("arch",["#161b22","#1a3a2a",C_GREEN,C_YELLOW],N=256)
+    im = ax2.imshow(matrix, aspect="auto", cmap=cmap_m, vmin=0, vmax=100)
+
+    ax2.set_xticks(range(len(arch_names)))
+    ax2.set_xticklabels(arch_names, color="#c9d1d9", fontsize=9, rotation=20, ha="right")
+    ax2.set_yticks(range(len(slabels_short)))
+    ax2.set_yticklabels(slabels_short, color="#8b949e", fontsize=9)
+
+    for i in range(len(seasons_available)):
+        for j in range(len(arch_names)):
+            val = matrix[i,j]
+            is_dom = (dominant[seasons_available[i]] == arch_names[j])
+            ax2.text(j, i, f"{val:.0f}", ha="center", va="center",
+                     fontsize=9 if is_dom else 8,
+                     fontweight="bold" if is_dom else "normal",
+                     color="white" if val > 50 else "#8b949e")
+            if is_dom:
+                ax2.add_patch(plt.Rectangle((j-.45, i-.45), .9, .9,
+                              fill=False, edgecolor="white", linewidth=1.5))
+
+    for spine in ax2.spines.values(): spine.set_visible(False)
+    ax2.tick_params(colors="#484f58")
+    cb = fig2.colorbar(im, ax=ax2, fraction=.015, pad=.02)
+    cb.ax.yaxis.set_tick_params(color="#8b949e", labelsize=8)
+    cb.outline.set_edgecolor("#30363d")
+    plt.setp(plt.getp(cb.ax.axes, "yticklabels"), color="#8b949e")
+    fig2.suptitle("Score Matrix  ·  white border = dominant archetype for that season",
+                  color="#8b949e", fontsize=9, y=1.01)
+    plt.tight_layout()
+    st.pyplot(fig2, width="stretch"); plt.close(fig2)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── ARCHETYPE DEFINITIONS ─────────────────────────────────────────────
+    st.markdown("### Archetype Definitions")
+    def_cols = st.columns(3)
+    for i, (name, weights) in enumerate(ARCHETYPES.items()):
+        col = def_cols[i % 3]
+        color = ARCH_COLORS[name]
+        metric_lines = "".join(
+            f"<div style='display:flex;justify-content:space-between;"
+            f"padding:2px 0;border-bottom:1px solid #21262d'>"
+            f"<span style='color:#8b949e;font-size:11px'>{m.replace('_',' ').title()}</span>"
+            f"<span style='color:{color};font-size:11px;font-weight:700'>×{w}</span></div>"
+            for m,w in weights.items()
+        )
+        col.markdown(
+            f"<div style='background:#161b22;border:1px solid #30363d;"
+            f"border-left:3px solid {color};border-radius:8px;"
+            f"padding:12px 14px;margin-bottom:12px'>"
+            f"<div style='font-size:13px;font-weight:700;color:{color};"
+            f"margin-bottom:8px'>{name}</div>"
+            f"{metric_lines}</div>",
+            unsafe_allow_html=True,
+        )
+
+# 17 – DEFENSIVE ACTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_def:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
