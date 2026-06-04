@@ -419,7 +419,7 @@ with tab_pass:
               f"{season_label()}  ·  {len(fp):,} passes  ·  "
               f"{sum(1 for p in fp if p['progressive']):,} progressive  ·  "
               f"{sum(1 for p in fp if p['key_pass']):,} shot assists")
-    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2 – SHOT MAP
@@ -444,7 +444,7 @@ with tab_shot:
                    (SHOT_STYLE[13][0],f"Off Target ({counts[13]})")], loc="lower center")
     add_title(fig,"Shot Map  ·  B. Mead",
               f"{season_label()}  ·  {len(fs)} shots  ·  {counts[16]} goals")
-    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3 – HEAT MAP
@@ -462,7 +462,7 @@ with tab_heat:
         pitch.kdeplot(xs,ys,ax=ax,cmap=cmap,fill=True,levels=100,alpha=.88,bw_adjust=.65,zorder=1)
     add_title(fig,"Heat Map  ·  B. Mead  (all actions)",
               f"{season_label()}  ·  {len(ft):,} actions")
-    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4 – TERRITORY MAP
@@ -489,7 +489,7 @@ with tab_terr:
         plt.setp(plt.getp(cbar.ax.axes,"yticklabels"),color="#8b949e")
     add_title(fig,"Territory Map  ·  B. Mead",
               f"{season_label()}  ·  action count per zone  ·  {len(ft):,} total")
-    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 5 – PASS NETWORK
@@ -540,7 +540,7 @@ with tab_net:
                 key=lambda x:x[1],default=("—",0))
         add_title(fig,"Pass Network  ·  B. Mead",
                   f"{season_label()}  ·  node size = passes  ·  top partner: {top[0]} ({top[1]})")
-        plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+        plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 6 – PASS SONARS
@@ -565,7 +565,7 @@ with tab_sonar:
                        "→ Forward  ← Backward  ↑↓ Wide",color="#8b949e",fontsize=8,y=.02)
         plt.tight_layout()
         _,mid,_=st.columns([1,2,1])
-        with mid: st.pyplot(fig_m,use_container_width=True)
+        with mid: st.pyplot(fig_m,width="stretch")
         plt.close(fig_m)
         st.markdown("<hr>",unsafe_allow_html=True)
         edges_f=[e for e in net_edges if e["season"] in selected_seasons]
@@ -589,7 +589,7 @@ with tab_sonar:
                         sn=partner.split(". ")[-1] if ". " in partner else partner
                         ec=pair_counts.get(tuple(sorted([partner,"B. Mead"])),0)
                         draw_sonar(ax_p,pp,f"{sn}\n({ec} w/ Mead)",fontsize_title=8)
-                        plt.tight_layout(); st.pyplot(fig_p,use_container_width=True); plt.close(fig_p)
+                        plt.tight_layout(); st.pyplot(fig_p,width="stretch"); plt.close(fig_p)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 7 – DRIBBLE MAP
@@ -614,7 +614,7 @@ with tab_drib:
     add_legend(ax,[(C_GREEN,f"Successful ({succ_d})"),(C_ORANGE,f"Unsuccessful ({total_d-succ_d})")])
     add_title(fig,"Dribble / Take-On Map  ·  B. Mead",
               f"{season_label()}  ·  {total_d} take-ons  ·  {round(succ_d/total_d*100,1) if total_d else 0}% success rate")
-    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 8 – CROSSING MAP
@@ -640,7 +640,7 @@ with tab_cross:
     add_legend(ax,[(C_BLUE,f"Successful ({succ_c})"),(C_ORANGE,f"Unsuccessful ({len(crosses)-succ_c})")])
     add_title(fig,"Crossing Map  ·  B. Mead",
               f"{season_label()}  ·  passes from wide channels into final third  ·  {len(crosses)} crosses")
-    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 9 – SHOT ZONES
@@ -675,7 +675,7 @@ with tab_szones:
                    (SHOT_STYLE[13][0],f"Off Target ({counts[13]})")],loc="lower center")
     add_title(fig,"Shot Zones  ·  B. Mead",
               f"{season_label()}  ·  zone count + individual shots overlaid")
-    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 10 – CAREER TIMELINE
@@ -716,7 +716,7 @@ with tab_career:
         ax.grid(axis="y",color="#21262d",linewidth=.5,zorder=0)
     fig.suptitle(f"Career Timeline  ·  B. Mead  ·  {season_label()}",
                  color="#e6edf3",fontsize=14,fontweight="800",y=.98)
-    plt.tight_layout(rect=[0,0,1,.95]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.95]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 11 – MATCH BY MATCH
@@ -752,14 +752,14 @@ with tab_match:
         ax.tick_params(colors="#484f58"); ax.yaxis.set_tick_params(labelcolor="#8b949e",labelsize=8)
         for sp in ax.spines.values(): sp.set_color("#30363d"); sp.set_linewidth(.5)
         ax.grid(axis="y",color="#21262d",linewidth=.5,zorder=0)
-        plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+        plt.tight_layout(); st.pyplot(fig,width="stretch"); plt.close(fig)
 
         # data table
         df=pd.DataFrame(mr_f)[["date","season","opponent",
             "passes","succ_passes","shots","goals","key_passes","prog_passes",
             "dribbles","succ_dribbles","tackles","interceptions"]]
         df.columns=[c.replace("_"," ").title() for c in df.columns]
-        st.dataframe(df,use_container_width=True,hide_index=True)
+        st.dataframe(df,width="stretch",hide_index=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 12 – RADAR / PIZZA CHART
@@ -823,13 +823,13 @@ with tab_radar:
         # ring labels
         for r,lbl in [(25,"25%"),(50,"50%"),(75,"75%"),(100,"100%")]:
             ax.text(0,r+2,lbl,ha="center",va="bottom",color="#484f58",fontsize=7)
-        ax.legend([mpatches.Patch(color=RADAR_COLORS[i],label=s.replace("WSL ",""))
-                   for i,s in enumerate(compare_seasons)],
+        ax.legend(handles=[mpatches.Patch(color=RADAR_COLORS[i],label=s.replace("WSL ",""))
+                           for i,s in enumerate(compare_seasons)],
                   loc="lower center",bbox_to_anchor=(.5,-.12),ncol=len(compare_seasons),
                   fontsize=9,framealpha=0,labelcolor="#c9d1d9",handlelength=1.5)
         fig.suptitle(f"Performance Radar  ·  B. Mead\n100 = career best season",
                      color="#e6edf3",fontsize=13,fontweight="800",y=.98)
-        plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+        plt.tight_layout(); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 13 – STYLE ANALYSIS
@@ -901,7 +901,7 @@ with tab_style:
 
     fig.suptitle(f"Style Analysis  ·  B. Mead  ·  {season_label()}",
                  color="#e6edf3",fontsize=14,fontweight="800",y=1.02)
-    plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 14 – SEASON COMPARE
@@ -933,7 +933,7 @@ with tab_compare:
                      color=color,fontsize=11,fontweight="700",pad=8)
     fig.suptitle(f"Season Comparison  ·  B. Mead",
                  color="#e6edf3",fontsize=14,fontweight="800",y=.98)
-    plt.tight_layout(rect=[0,0,1,.95]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.95]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 15 – OPPOSITION BREAKDOWN
@@ -977,7 +977,7 @@ with tab_oppo:
         ax.tick_params(colors="#484f58"); ax.yaxis.set_tick_params(labelcolor="#8b949e",labelsize=8)
         for sp in ax.spines.values(): sp.set_color("#30363d")
         ax.grid(axis="y",color="#21262d",linewidth=.5)
-        plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+        plt.tight_layout(); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 16 – DEFENSIVE ACTIONS
@@ -995,7 +995,7 @@ with tab_def:
                        for a in sel_def])
     add_title(fig,"Defensive Actions  ·  B. Mead",
               f"{season_label()}  ·  {len(fd)} actions")
-    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 17 – PERCENTILE CHART
@@ -1047,4 +1047,4 @@ with tab_perc:
                 for sp in ax.spines.values(): sp.set_visible(False)
                 ax.axvline(100,color="#30363d",linewidth=.8,linestyle="--",zorder=3)
                 ax.set_title(s.replace("WSL ",""),color=C_BLUE,fontsize=10,fontweight="800",pad=10)
-                plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+                plt.tight_layout(); st.pyplot(fig,width="stretch"); plt.close(fig)
