@@ -16,6 +16,8 @@ st.set_page_config(
     page_icon="⚽",
 )
 
+st.title("⚽ B. Mead — Pass Map")
+
 BG = "#1a1a1a"
 LINE_COLOR = "white"
 
@@ -106,26 +108,43 @@ def load_all_passes():
 all_passes = load_all_passes()
 seasons_available = sorted(set(p["season"] for p in all_passes))
 
-# ── sidebar filters ───────────────────────────────────────────────────────────
+# ── filters (top of page, horizontal columns) ────────────────────────────────
 
-st.sidebar.title("⚽ B. Mead — Pass Map")
-st.sidebar.markdown("Filter passes, then view the map below.")
+st.markdown("### Filters")
+fcol1, fcol2, fcol3, fcol4, fcol5, fcol6 = st.columns(6)
 
-selected_seasons = st.sidebar.multiselect(
-    "Season(s)",
-    options=seasons_available,
-    default=seasons_available,
-    help="Select one or more seasons",
-)
+with fcol1:
+    season_choice = st.selectbox("Season", options=["All Seasons"] + seasons_available)
 
-pass_types = st.sidebar.multiselect(
-    "Pass type(s)",
-    options=["Successful", "Unsuccessful", "Progressive", "Shot Assist / Key Pass"],
-    default=["Successful", "Unsuccessful", "Progressive", "Shot Assist / Key Pass"],
-)
+with fcol2:
+    show_successful = st.selectbox("Successful", options=["Show", "Hide"])
 
-st.sidebar.markdown("---")
-st.sidebar.caption("Data: Opta / WSL  |  Viz: mplsoccer")
+with fcol3:
+    show_unsuccessful = st.selectbox("Unsuccessful", options=["Show", "Hide"])
+
+with fcol4:
+    show_progressive = st.selectbox("Progressive", options=["Show", "Hide"])
+
+with fcol5:
+    show_key_pass = st.selectbox("Shot Assist / Key Pass", options=["Show", "Hide"])
+
+with fcol6:
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.caption("Data: Opta / WSL\nViz: mplsoccer")
+
+# Build selected seasons + pass types from dropdowns
+if season_choice == "All Seasons":
+    selected_seasons = seasons_available
+else:
+    selected_seasons = [season_choice]
+
+pass_types = []
+if show_successful   == "Show": pass_types.append("Successful")
+if show_unsuccessful == "Show": pass_types.append("Unsuccessful")
+if show_progressive  == "Show": pass_types.append("Progressive")
+if show_key_pass     == "Show": pass_types.append("Shot Assist / Key Pass")
+
+st.markdown("---")
 
 # ── filter passes ─────────────────────────────────────────────────────────────
 
