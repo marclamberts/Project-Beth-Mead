@@ -101,9 +101,8 @@ def load_data():
             elif tid in (13, 14, 15, 16):
                 shots.append({**base_rec, "type_id": tid})
 
-            # ── all touches / heat ────────────────────────────────────────────
-            elif tid in (1, 2, 3, 4, 7, 8, 12, 13, 14, 15, 16, 43, 44, 45, 49, 50, 61, 74):
-                touches.append(base_rec)
+            # ── all actions / heat (every event with a valid position) ───────
+            touches.append(base_rec)
 
             # ── defensive actions ─────────────────────────────────────────────
             if tid in (7, 8, 12, 74):
