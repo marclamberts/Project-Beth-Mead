@@ -137,11 +137,12 @@ def load_data():
     base  = os.path.dirname(__file__)
     files = sorted(glob.glob(os.path.join(base, "**/*.json"), recursive=True))
 
-    passes   = []
-    shots    = []
-    touches  = []
-    def_acts = []
-    net_edges = []   # pass-network: {passer, recipient, season, x, y}
+    passes      = []
+    shots       = []
+    touches     = []
+    def_acts    = []
+    net_edges   = []   # pass-network: {passer, recipient, season, x, y}
+    sonar_passes = []  # all Arsenal passes with angle+dist for sonar
     net_pos   = []   # per-event positions for avg position node placement
 
     for fpath in files:
@@ -161,6 +162,29 @@ def load_data():
         arsenal_id = next(
             e["contestantId"] for e in events if e.get("playerName") == "B. Mead"
         )
+
+        # ── sonar: ALL Arsenal passes (for per-player direction wheels) ────
+        import math as _math
+        for e in events:
+            if (e.get("contestantId") != arsenal_id
+                    or e.get("typeId") != 1):
+                continue
+            px, py = e.get("x"), e.get("y")
+            ex_str = get_qualifier(e, 140)
+            ey_str = get_qualifier(e, 141)
+            if None in (px, py, ex_str, ey_str):
+                continue
+            dx = float(ex_str) - px
+            dy = float(ey_str) - py
+            angle = _math.degrees(_math.atan2(dy, dx))
+            dist  = _math.hypot(dx, dy)
+            sonar_passes.append({
+                "player":  e.get("playerName", ""),
+                "angle":   angle,
+                "dist":    dist,
+                "outcome": e.get("outcome", 0),
+                "season":  season,
+            })
 
         # ── pass network: all successful Arsenal passes ─────────────────────
         event_idx = {e["id"]: i for i, e in enumerate(events)}
@@ -221,10 +245,10 @@ def load_data():
 
             touches.append(base_rec)
 
-    return passes, shots, touches, def_acts, net_edges, net_pos
+    return passes, shots, touches, def_acts, net_edges, net_pos, sonar_passes
 
 
-passes, shots, touches, def_acts, net_edges, net_pos = load_data()
+passes, shots, touches, def_acts, net_edges, net_pos, sonar_passes = load_data()
 seasons_available = sorted(set(p["season"] for p in passes))
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -395,10 +419,11 @@ tabs = st.tabs([
     "🔥  Heat Map",
     "🗺  Territory",
     "🔗  Pass Network",
+    "🧭  Pass Sonars",
     "🛡  Defensive",
     "📊  Percentile",
 ])
-tab_pass, tab_shot, tab_heat, tab_terr, tab_net, tab_def, tab_perc = tabs
+tab_pass, tab_shot, tab_heat, tab_terr, tab_net, tab_sonar, tab_def, tab_perc = tabs
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 1 – PASS MAP
@@ -707,7 +732,196 @@ with tab_net:
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
-# TAB 6 – DEFENSIVE ACTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 6 – PASS SONARS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def draw_sonar(ax, player_passes, title, highlight=False, fontsize_title=10):
+    """Draw a pass direction sonar on a given polar Axes."""
+    import numpy as np
+
+    N_BINS   = 16
+    bin_size = 360 / N_BINS
+    bins     = np.linspace(-np.pi, np.pi, N_BINS + 1)
+    theta    = bins[:-1] + (bins[1] - bins[0]) / 2   # bin centres
+
+    succ_counts = np.zeros(N_BINS)
+    fail_counts = np.zeros(N_BINS)
+    avg_dist    = np.zeros(N_BINS)
+    dist_count  = np.zeros(N_BINS)
+
+    for p in player_passes:
+        a = np.radians(p["angle"])
+        # find bin
+        b = int((a + np.pi) / (2 * np.pi) * N_BINS) % N_BINS
+        if p["outcome"] == 1:
+            succ_counts[b] += 1
+        else:
+            fail_counts[b] += 1
+        avg_dist[b]   += p["dist"]
+        dist_count[b] += 1
+
+    avg_dist = np.where(dist_count > 0, avg_dist / dist_count, 0)
+    max_cnt  = max(succ_counts + fail_counts) or 1
+
+    width = 2 * np.pi / N_BINS * 0.88
+
+    # background rings
+    for r in [0.25, 0.5, 0.75, 1.0]:
+        ring = plt.Circle((0, 0), r * max_cnt, transform=ax.transData._b,
+                           fill=False, color="#30363d", linewidth=0.4, zorder=0)
+
+    # unsuccessful (bottom layer)
+    ax.bar(theta, fail_counts,
+           width=width, bottom=0,
+           color=ACCENT_ORG, alpha=0.55, zorder=2, linewidth=0)
+
+    # successful stacked on top
+    ax.bar(theta, succ_counts,
+           width=width, bottom=fail_counts,
+           color=ACCENT_YLW, alpha=0.85, zorder=3, linewidth=0)
+
+    # average distance dot ring
+    valid = dist_count > 0
+    ax.scatter(theta[valid], avg_dist[valid] * (max_cnt / (avg_dist[valid].max() or 1)) * 0.55,
+               s=8, color=ACCENT_BLUE, zorder=5, alpha=0.8)
+
+    # direction labels
+    dir_labels = {
+        0:  "→",   # forward
+        4:  "↑",   # left / up
+        8:  "←",   # back
+        12: "↓",   # right / down
+    }
+    for bidx, lbl in dir_labels.items():
+        ax.text(theta[bidx], max_cnt * 1.25, lbl,
+                ha="center", va="center", fontsize=9,
+                color="#8b949e", fontweight="bold")
+
+    # grid / style
+    ax.set_theta_zero_location("E")
+    ax.set_theta_direction(1)
+    ax.set_ylim(0, max_cnt * 1.4)
+    ax.set_yticks([])
+    ax.set_xticks([])
+    ax.set_facecolor("#161b22")
+    ax.spines["polar"].set_visible(False)
+
+    total = int(succ_counts.sum() + fail_counts.sum())
+    acc   = round(succ_counts.sum() / total * 100) if total else 0
+    title_color = ACCENT_YLW if highlight else "#e6edf3"
+    ax.set_title(
+        f"{title}\n"
+        f"{'─'*len(title)}\n"
+        f"{total} passes · {acc}% acc",
+        color=title_color, fontsize=fontsize_title,
+        fontweight="bold" if highlight else "normal",
+        pad=8, loc="center",
+    )
+
+
+with tab_sonar:
+    fp = f_passes(passes)
+    fs = f_shots(shots)
+    fd = f_def(def_acts)
+    metric_row(fp, fs, fd)
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    import numpy as np
+    from collections import Counter, defaultdict
+
+    sp_f = [p for p in sonar_passes if p["season"] in selected_seasons]
+
+    if not sp_f:
+        st.info("No sonar data for the selected season(s).")
+    else:
+        mead_sp = [p for p in sp_f if p["player"] == "B. Mead"]
+
+        # ── large Mead sonar ──────────────────────────────────────────────
+        fig_m = plt.figure(figsize=(6, 6), facecolor=FIG_BG)
+        ax_m  = fig_m.add_subplot(111, projection="polar")
+        draw_sonar(ax_m, mead_sp, "B. Mead", highlight=True, fontsize_title=12)
+
+        # legend inside the big sonar
+        import matplotlib.patches as mp
+        handles = [
+            mp.Patch(color=ACCENT_YLW, label="Successful"),
+            mp.Patch(color=ACCENT_ORG, label="Unsuccessful"),
+            mp.Patch(color=ACCENT_BLUE, label="Avg distance (scaled)"),
+        ]
+        ax_m.legend(handles=handles, loc="lower center",
+                    bbox_to_anchor=(0.5, -0.18), ncol=3,
+                    fontsize=7.5, framealpha=0.0,
+                    labelcolor="#c9d1d9", handlelength=1.2)
+
+        fig_m.suptitle(
+            f"Pass Sonar  ·  B. Mead  ·  {season_label()}\n"
+            f"→ = Forward (attacking)   ← = Backward   ↑↓ = Wide",
+            color="#8b949e", fontsize=8, y=0.02,
+        )
+        plt.tight_layout()
+
+        # center the big sonar
+        _, mid, _ = st.columns([1, 2, 1])
+        with mid:
+            st.pyplot(fig_m, use_container_width=True)
+        plt.close(fig_m)
+
+        st.markdown("<hr>", unsafe_allow_html=True)
+
+        # ── mini sonars for top partners ──────────────────────────────────
+        # Find top pass partners (based on net_edges filtered by season)
+        edges_f = [e for e in net_edges if e["season"] in selected_seasons]
+        pair_counts = Counter()
+        for e in edges_f:
+            pair = tuple(sorted([e["passer"], e["recipient"]]))
+            pair_counts[pair] += 1
+
+        top_partners = sorted(
+            [p for (p1, p2), _ in pair_counts.most_common()
+             for p in ([p1] if p2 == "B. Mead" else ([p2] if p1 == "B. Mead" else []))],
+            key=lambda p: -pair_counts[tuple(sorted([p, "B. Mead"]))]
+        )
+        # deduplicate keeping order
+        seen = set()
+        top_partners_unique = []
+        for p in top_partners:
+            if p not in seen and p != "B. Mead":
+                seen.add(p)
+                top_partners_unique.append(p)
+        top_partners_unique = top_partners_unique[:8]
+
+        if top_partners_unique:
+            st.markdown(
+                "<div style='font-size:13px;font-weight:700;color:#8b949e;"
+                "text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px'>"
+                "Top Pass Partners — Direction Wheels</div>",
+                unsafe_allow_html=True,
+            )
+
+            cols_per_row = 4
+            for row_start in range(0, len(top_partners_unique), cols_per_row):
+                row_players = top_partners_unique[row_start:row_start + cols_per_row]
+                cols = st.columns(cols_per_row)
+                for col, partner in zip(cols, row_players):
+                    with col:
+                        partner_passes = [p for p in sp_f if p["player"] == partner]
+                        fig_p, ax_p = plt.subplots(
+                            figsize=(3.2, 3.2), subplot_kw={"projection": "polar"},
+                            facecolor=FIG_BG,
+                        )
+                        short_name = partner.split(". ")[-1] if ". " in partner else partner
+                        edge_cnt = pair_counts.get(
+                            tuple(sorted([partner, "B. Mead"])), 0
+                        )
+                        draw_sonar(ax_p, partner_passes,
+                                   f"{short_name}\n({edge_cnt} passes w/ Mead)",
+                                   fontsize_title=8)
+                        plt.tight_layout()
+                        st.pyplot(fig_p, use_container_width=True)
+                        plt.close(fig_p)
+
+# TAB 7 – DEFENSIVE ACTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab_def:
