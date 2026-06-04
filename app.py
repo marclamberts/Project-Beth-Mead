@@ -391,21 +391,30 @@ with tab_heat:
     metric_row(fp, fs, ft, fd)
     st.markdown("---")
 
-    pitch, fig, ax = make_pitch(figsize=(16, 10))
+    # line_zorder=2 ensures pitch lines render above the KDE fill layer
+    pitch = Pitch(
+        pitch_type="opta",
+        pitch_color=BG,
+        line_color=LINE_COLOR,
+        linewidth=1.5,
+        goal_type="box",
+        line_zorder=2,
+    )
+    fig, ax = pitch.draw(figsize=(16, 10))
+    fig.patch.set_facecolor(BG)
 
     xs = [t["x"] for t in ft]
     ys = [t["y"] for t in ft]
 
     if xs:
-        # Custom dark-to-orange colormap
         cmap = LinearSegmentedColormap.from_list(
             "mead_heat", [BG, "#3d1c00", "#f5a623", "#ffffff"], N=256
         )
         pitch.kdeplot(xs, ys, ax=ax, cmap=cmap, fill=True, levels=100,
                       alpha=0.85, bw_adjust=0.7, zorder=1)
 
-    add_title(fig, "Touch Heat Map — B. Mead",
-              f"{season_label()}  ·  {len(ft):,} touches")
+    add_title(fig, "Heat Map — B. Mead  (all actions)",
+              f"{season_label()}  ·  {len(ft):,} actions")
     plt.tight_layout(rect=[0, 0, 1, 0.93])
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
