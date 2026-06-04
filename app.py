@@ -1,12 +1,15 @@
 import json
 import glob
 import os
+import math
+from collections import defaultdict, Counter
 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.gridspec as gridspec
 from matplotlib.colors import LinearSegmentedColormap
-from matplotlib import font_manager
+from matplotlib.patches import FancyArrowPatch
 import streamlit as st
 from mplsoccer import Pitch, VerticalPitch
 
@@ -19,131 +22,107 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── global CSS (StatsBomb-inspired) ───────────────────────────────────────────
+# ── global CSS ────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <style>
-/* ── base ── */
 html, body, [data-testid="stAppViewContainer"] {
-    background-color: #0e1117;
-    color: #e6edf3;
+    background-color: #0e1117; color: #e6edf3;
     font-family: 'Inter', 'Helvetica Neue', sans-serif;
 }
 [data-testid="stSidebar"] {
-    background-color: #161b22;
-    border-right: 1px solid #30363d;
+    background-color: #161b22; border-right: 1px solid #30363d;
 }
 [data-testid="stSidebar"] * { color: #e6edf3 !important; }
-
-/* ── tabs ── */
 [data-baseweb="tab-list"] {
-    background-color: #161b22 !important;
-    border-radius: 8px;
-    padding: 4px;
-    gap: 4px;
-    border: 1px solid #30363d;
+    background-color: #161b22 !important; border-radius: 8px;
+    padding: 4px; gap: 4px; border: 1px solid #30363d;
 }
 [data-baseweb="tab"] {
-    background-color: transparent !important;
-    color: #8b949e !important;
-    border-radius: 6px !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-    padding: 8px 16px !important;
-    border: none !important;
+    background-color: transparent !important; color: #8b949e !important;
+    border-radius: 6px !important; font-weight: 600 !important;
+    font-size: 13px !important; padding: 8px 14px !important; border: none !important;
 }
 [aria-selected="true"][data-baseweb="tab"] {
-    background-color: #21262d !important;
-    color: #58a6ff !important;
+    background-color: #21262d !important; color: #58a6ff !important;
 }
-[data-baseweb="tab"]:hover {
-    color: #e6edf3 !important;
-    background-color: #21262d !important;
-}
-
-/* ── metrics ── */
+[data-baseweb="tab"]:hover { color: #e6edf3 !important; background-color: #21262d !important; }
 [data-testid="stMetric"] {
-    background-color: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 14px 18px;
+    background-color: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; padding: 14px 18px;
 }
-[data-testid="stMetricLabel"] { color: #8b949e !important; font-size: 11px !important; text-transform: uppercase; letter-spacing: 0.05em; }
-[data-testid="stMetricValue"] { color: #e6edf3 !important; font-size: 22px !important; font-weight: 700 !important; }
-
-/* ── divider ── */
+[data-testid="stMetricLabel"] { color: #8b949e !important; font-size: 11px !important;
+    text-transform: uppercase; letter-spacing: 0.05em; }
+[data-testid="stMetricValue"] { color: #e6edf3 !important; font-size: 22px !important;
+    font-weight: 700 !important; }
 hr { border-color: #30363d !important; }
-
-/* ── checkboxes / multiselect ── */
 [data-testid="stCheckbox"] label { color: #c9d1d9 !important; font-size: 13px !important; }
-[data-baseweb="select"] { background-color: #21262d !important; border-color: #30363d !important; }
-
-/* ── section headers ── */
 h3 { color: #58a6ff !important; font-size: 13px !important; text-transform: uppercase;
      letter-spacing: 0.08em; font-weight: 700 !important; margin-bottom: 6px !important; }
-
-/* ── dataframe ── */
 [data-testid="stDataFrame"] { border: 1px solid #30363d; border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── colour palette ────────────────────────────────────────────────────────────
+# ── palette ───────────────────────────────────────────────────────────────────
 
-PITCH_BG    = "#0d1117"
-PITCH_LINE  = "#c9d1d9"
-FIG_BG      = "#0e1117"
-ACCENT_BLUE = "#58a6ff"
-ACCENT_ORG  = "#f78166"
-ACCENT_GRN  = "#3fb950"
-ACCENT_PRP  = "#bc8cff"
-ACCENT_YLW  = "#e3b341"
+PITCH_BG   = "#0d1117"
+PITCH_LINE = "#c9d1d9"
+FIG_BG     = "#0e1117"
+C_BLUE     = "#58a6ff"
+C_ORANGE   = "#f78166"
+C_GREEN    = "#3fb950"
+C_PURPLE   = "#bc8cff"
+C_YELLOW   = "#e3b341"
+C_MUTED    = "#484f58"
 
-PASS_COLOR = {
-    "key":         "#58a6ff",
-    "progressive": "#3fb950",
-    "successful":  "#e3b341",
-    "unsuccessful":"#f78166",
-}
-
-SHOT_STYLE = {
-    16: ("#e3b341", "*", 300, 0.95, 4),  # goal
-    15: ("#58a6ff", "o", 130, 0.85, 3),  # on target
-    14: ("#bc8cff", "D", 110, 0.85, 3),  # post
-    13: ("#f78166", "X",  90, 0.50, 2),  # off target
-}
-
-DEF_COLOR = {
-    "Tackle":       "#f78166",
-    "Interception": "#e3b341",
-    "Clearance":    "#3fb950",
-    "Block":        "#58a6ff",
-}
+PASS_COLOR = {"key": C_BLUE, "progressive": C_GREEN, "successful": C_YELLOW, "unsuccessful": C_ORANGE}
+SHOT_STYLE = {16: (C_YELLOW,"*",300,.95,4), 15: (C_BLUE,"o",130,.85,3),
+              14: (C_PURPLE,"D",110,.85,3), 13: (C_ORANGE,"X",90,.50,2)}
+DEF_COLOR  = {"Tackle": C_ORANGE, "Interception": C_YELLOW, "Clearance": C_GREEN, "Block": C_BLUE}
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def get_qualifier(event, qid):
+def get_q(event, qid):
     for q in event.get("qualifier", []):
         if q["qualifierId"] == qid:
             return q.get("value")
     return None
 
-def has_qualifier(event, qid):
+def has_q(event, qid):
     return any(q["qualifierId"] == qid for q in event.get("qualifier", []))
+
+def make_pitch(vertical=False, half=False, figsize=(16,10), lz=1):
+    cls = VerticalPitch if vertical else Pitch
+    kw  = dict(pitch_type="opta", pitch_color=PITCH_BG, line_color=PITCH_LINE,
+               linewidth=1.0, goal_type="box", line_zorder=lz)
+    if vertical: kw["half"] = half
+    p = cls(**kw)
+    fig, ax = p.draw(figsize=figsize)
+    fig.patch.set_facecolor(FIG_BG)
+    ax.set_facecolor(PITCH_BG)
+    return p, fig, ax
+
+def add_title(fig, title, sub=""):
+    fig.text(.5,.98,title,ha="center",va="top",fontsize=14,fontweight="800",color="#e6edf3")
+    if sub:
+        fig.text(.5,.945,sub,ha="center",va="top",fontsize=9,color="#8b949e")
+
+def add_legend(ax, items, loc="lower left"):
+    h = [mpatches.Patch(color=c, label=l) for c,l in items]
+    ax.legend(handles=h, loc=loc, fontsize=8.5, framealpha=.35,
+              facecolor="#161b22", edgecolor="#30363d",
+              labelcolor="#c9d1d9", handlelength=1.2, borderpad=.7, labelspacing=.5)
 
 # ── data loading ──────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner="Loading data…")
 def load_data():
     base  = os.path.dirname(__file__)
-    files = sorted(glob.glob(os.path.join(base, "**/*.json"), recursive=True))
+    files = sorted(glob.glob(os.path.join(base,"**/*.json"), recursive=True))
 
-    passes      = []
-    shots       = []
-    touches     = []
-    def_acts    = []
-    net_edges   = []   # pass-network: {passer, recipient, season, x, y}
-    sonar_passes = []  # all Arsenal passes with angle+dist for sonar
-    net_pos   = []   # per-event positions for avg position node placement
+    passes = []; shots = []; touches = []; def_acts = []
+    dribbles = []; net_edges = []; net_pos = []; sonar_passes = []
+    match_rows = []   # per-game aggregated stats for Mead
 
     for fpath in files:
         fname  = os.path.basename(fpath)
@@ -153,881 +132,919 @@ def load_data():
             data = json.load(fp)
         if "event" not in data:
             continue
-
         events = data["event"]
         if not any(e.get("playerName") == "B. Mead" for e in events):
             continue
 
-        # Arsenal's contestant ID for this file
-        arsenal_id = next(
-            e["contestantId"] for e in events if e.get("playerName") == "B. Mead"
-        )
+        arsenal_id = next(e["contestantId"] for e in events if e.get("playerName")=="B. Mead")
 
-        # ── sonar: ALL Arsenal passes (for per-player direction wheels) ────
-        import math as _math
+        # parse date + opponent from filename: "YYYY-MM-DD_Home - Away.json"
+        date_str = fname.split("_")[0] if "_" in fname else "unknown"
+        teams_str = fname.replace(".json","").split("_",1)[1] if "_" in fname else fname
+        parts = teams_str.split(" - ")
+        home_t = parts[0].strip() if len(parts)>=2 else ""
+        away_t = parts[1].strip() if len(parts)>=2 else ""
+        opponent = away_t if "Arsenal" in home_t else home_t
+
+        # ── sonar: all Arsenal passes ──────────────────────────────────────
         for e in events:
-            if (e.get("contestantId") != arsenal_id
-                    or e.get("typeId") != 1):
+            if e.get("contestantId") != arsenal_id or e.get("typeId") != 1:
                 continue
             px, py = e.get("x"), e.get("y")
-            ex_str = get_qualifier(e, 140)
-            ey_str = get_qualifier(e, 141)
-            if None in (px, py, ex_str, ey_str):
-                continue
-            dx = float(ex_str) - px
-            dy = float(ey_str) - py
-            angle = _math.degrees(_math.atan2(dy, dx))
-            dist  = _math.hypot(dx, dy)
-            sonar_passes.append({
-                "player":  e.get("playerName", ""),
-                "angle":   angle,
-                "dist":    dist,
-                "outcome": e.get("outcome", 0),
-                "season":  season,
-            })
+            ex_s, ey_s = get_q(e,140), get_q(e,141)
+            if None in (px,py,ex_s,ey_s): continue
+            dx,dy = float(ex_s)-px, float(ey_s)-py
+            sonar_passes.append({"player":e.get("playerName",""), "angle":math.degrees(math.atan2(dy,dx)),
+                                  "dist":math.hypot(dx,dy), "outcome":e.get("outcome",0), "season":season})
 
-        # ── pass network: all successful Arsenal passes ─────────────────────
-        event_idx = {e["id"]: i for i, e in enumerate(events)}
-        for i, e in enumerate(events):
-            if (e.get("contestantId") != arsenal_id
-                    or e.get("typeId") != 1
-                    or e.get("outcome") != 1):
-                continue
-            passer = e.get("playerName")
-            px, py = e.get("x"), e.get("y")
-            if not passer or px is None:
-                continue
-            # recipient = first subsequent event by same team
-            for j in range(i + 1, min(i + 6, len(events))):
+        # ── pass network ──────────────────────────────────────────────────
+        for i,e in enumerate(events):
+            if e.get("contestantId")!=arsenal_id or e.get("typeId")!=1 or e.get("outcome")!=1: continue
+            passer = e.get("playerName"); px,py = e.get("x"), e.get("y")
+            if not passer or px is None: continue
+            for j in range(i+1, min(i+6, len(events))):
                 ne = events[j]
-                if ne.get("contestantId") == arsenal_id and ne.get("playerName"):
-                    recipient = ne["playerName"]
-                    if recipient != passer:
-                        net_edges.append({
-                            "passer": passer, "recipient": recipient,
-                            "season": season,
-                        })
+                if ne.get("contestantId")==arsenal_id and ne.get("playerName"):
+                    rec = ne["playerName"]
+                    if rec != passer:
+                        net_edges.append({"passer":passer,"recipient":rec,"season":season})
                     break
-            # store position for average-position node
-            net_pos.append({"player": passer, "x": px, "y": py, "season": season})
+            net_pos.append({"player":passer,"x":px,"y":py,"season":season})
 
-        # ── Beth Mead events ────────────────────────────────────────────────
-        for e in events:
-            if e.get("playerName") != "B. Mead":
-                continue
+        # ── per-match aggregates for Mead ─────────────────────────────────
+        mead_ev = [e for e in events if e.get("playerName")=="B. Mead"]
+        match_rows.append({
+            "match_id": fname.replace(".json",""),
+            "date": date_str,
+            "opponent": opponent,
+            "season": season,
+            "passes":       sum(1 for e in mead_ev if e["typeId"]==1),
+            "succ_passes":  sum(1 for e in mead_ev if e["typeId"]==1 and e.get("outcome")==1),
+            "shots":        sum(1 for e in mead_ev if e["typeId"] in (13,14,15,16)),
+            "goals":        sum(1 for e in mead_ev if e["typeId"]==16),
+            "key_passes":   sum(1 for e in mead_ev if e["typeId"]==1 and has_q(e,210)),
+            "prog_passes":  0,  # filled below after passes built
+            "tackles":      sum(1 for e in mead_ev if e["typeId"]==7),
+            "interceptions":sum(1 for e in mead_ev if e["typeId"]==8),
+            "dribbles":     sum(1 for e in mead_ev if e["typeId"]==3),
+            "succ_dribbles":sum(1 for e in mead_ev if e["typeId"]==3 and e.get("outcome")==1),
+        })
+
+        # ── Mead individual events ────────────────────────────────────────
+        for e in mead_ev:
             tid     = e.get("typeId")
-            x       = e.get("x")
-            y       = e.get("y")
-            outcome = e.get("outcome", 0)
-            period  = e.get("periodId", 1)
-            if x is None or y is None:
-                continue
-
-            base_rec = dict(x=x, y=y, season=season, outcome=outcome, period=period)
+            x,y     = e.get("x"), e.get("y")
+            outcome = e.get("outcome",0)
+            period  = e.get("periodId",1)
+            if None in (x,y): continue
+            base = dict(x=x,y=y,season=season,outcome=outcome,period=period,
+                        date=date_str,opponent=opponent)
 
             if tid == 1:
-                ex = get_qualifier(e, 140)
-                ey = get_qualifier(e, 141)
-                if ex is None or ey is None:
-                    continue
-                end_x, end_y = float(ex), float(ey)
-                is_key  = has_qualifier(e, 210)
-                is_prog = outcome == 1 and end_x - x >= 10 and end_x > 50
-                passes.append({**base_rec,
-                    "end_x": end_x, "end_y": end_y,
-                    "key_pass": is_key, "progressive": is_prog})
-            elif tid in (13, 14, 15, 16):
-                shots.append({**base_rec, "type_id": tid})
+                ex_s,ey_s = get_q(e,140), get_q(e,141)
+                if None in (ex_s,ey_s): continue
+                end_x,end_y = float(ex_s),float(ey_s)
+                is_key  = has_q(e,210)
+                is_prog = outcome==1 and end_x-x>=10 and end_x>50
+                dist    = math.hypot(end_x-x, end_y-y)
+                passes.append({**base,"end_x":end_x,"end_y":end_y,
+                                "key_pass":is_key,"progressive":is_prog,"dist":dist})
 
-            if tid in (7, 8, 12, 74):
-                label_map = {7: "Tackle", 8: "Interception", 12: "Clearance", 74: "Block"}
-                def_acts.append({**base_rec, "action": label_map[tid]})
+            elif tid in (13,14,15,16):
+                foot = get_q(e,56) or "Unknown"
+                shots.append({**base,"type_id":tid,"foot":foot})
 
-            touches.append(base_rec)
+            elif tid == 3:
+                dribbles.append(base)
 
-    return passes, shots, touches, def_acts, net_edges, net_pos, sonar_passes
+            if tid in (7,8,12,74):
+                lm = {7:"Tackle",8:"Interception",12:"Clearance",74:"Block"}
+                def_acts.append({**base,"action":lm[tid]})
+
+            touches.append(base)
+
+    # back-fill progressive pass count in match_rows
+    prog_by_match = Counter()
+    for p in passes:
+        if p["progressive"]:
+            prog_by_match[p["date"]+"_"+p["opponent"]] += 1
+    for row in match_rows:
+        key = row["date"]+"_"+row["opponent"]
+        row["prog_passes"] = prog_by_match[key]
+
+    return passes,shots,touches,def_acts,dribbles,net_edges,net_pos,sonar_passes,match_rows
 
 
-passes, shots, touches, def_acts, net_edges, net_pos, sonar_passes = load_data()
+passes,shots,touches,def_acts,dribbles,net_edges,net_pos,sonar_passes,match_rows = load_data()
 seasons_available = sorted(set(p["season"] for p in passes))
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("""
-    <div style='padding:16px 0 8px 0'>
-      <div style='font-size:20px;font-weight:800;color:#e6edf3;letter-spacing:-0.3px'>Beth Mead</div>
+    <div style='padding:16px 0 8px'>
+      <div style='font-size:20px;font-weight:800;color:#e6edf3;letter-spacing:-.3px'>Beth Mead</div>
       <div style='font-size:12px;color:#8b949e;margin-top:2px'>Arsenal WFC · Forward</div>
       <div style='height:1px;background:#30363d;margin:14px 0'></div>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
 
     st.markdown("### 🗓 Season")
-    selected_seasons = st.multiselect(
-        "season", options=seasons_available, default=seasons_available,
-        label_visibility="collapsed",
-    )
+    selected_seasons = st.multiselect("season", seasons_available, seasons_available, label_visibility="collapsed")
 
-    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>",
-                unsafe_allow_html=True)
+    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>", unsafe_allow_html=True)
     st.markdown("### 🎯 Pass Filters")
     show_succ   = st.checkbox("Successful",             value=True)
     show_unsucc = st.checkbox("Unsuccessful",           value=True)
     show_prog   = st.checkbox("Progressive",            value=True)
     show_key    = st.checkbox("Shot Assist / Key Pass", value=True)
 
-    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>",
-                unsafe_allow_html=True)
+    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>", unsafe_allow_html=True)
     st.markdown("### 🥅 Shot Filters")
-    show_goals   = st.checkbox("Goal (16)",                value=True)
-    show_on_tgt  = st.checkbox("On Target / Saved (15)",   value=True)
+    show_goals   = st.checkbox("Goal (16)",                 value=True)
+    show_on_tgt  = st.checkbox("On Target / Saved (15)",    value=True)
     show_post    = st.checkbox("Post (14)",                 value=True)
-    show_off_tgt = st.checkbox("Off Target (13)",          value=True)
+    show_off_tgt = st.checkbox("Off Target (13)",           value=True)
 
-    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>",
-                unsafe_allow_html=True)
+    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>", unsafe_allow_html=True)
     st.markdown("### 🛡 Defensive Filters")
-    all_def = ["Tackle", "Interception", "Clearance", "Block"]
-    sel_def = st.multiselect("def", all_def, default=all_def,
-                             label_visibility="collapsed")
+    all_def = ["Tackle","Interception","Clearance","Block"]
+    sel_def = st.multiselect("def", all_def, all_def, label_visibility="collapsed")
 
-    st.markdown("<div style='height:1px;background:#30363d;margin:16px 0 8px 0'></div>",
-                unsafe_allow_html=True)
+    st.markdown("<div style='height:1px;background:#30363d;margin:16px 0 8px'></div>", unsafe_allow_html=True)
     st.markdown("<div style='font-size:11px;color:#484f58;line-height:1.6'>Data: Opta / WSL<br>Viz: mplsoccer</div>",
                 unsafe_allow_html=True)
 
-# ── filter helpers ────────────────────────────────────────────────────────────
+# ── filter functions ──────────────────────────────────────────────────────────
 
 def pass_type(p):
     if p["key_pass"]:     return "key"
     if p["progressive"]:  return "progressive"
-    if p["outcome"] == 1: return "successful"
+    if p["outcome"]==1:   return "successful"
     return "unsuccessful"
 
 def f_passes(data):
-    out = []
+    out=[]
     for p in data:
         if p["season"] not in selected_seasons: continue
         pt = pass_type(p)
-        if pt == "key"          and not show_key:    continue
-        if pt == "progressive"  and not show_prog:   continue
-        if pt == "successful"   and not show_succ:   continue
-        if pt == "unsuccessful" and not show_unsucc: continue
+        if pt=="key"          and not show_key:    continue
+        if pt=="progressive"  and not show_prog:   continue
+        if pt=="successful"   and not show_succ:   continue
+        if pt=="unsuccessful" and not show_unsucc: continue
         out.append(p)
     return out
 
 def f_shots(data):
-    out = []
+    out=[]
     for s in data:
         if s["season"] not in selected_seasons: continue
-        tid = s["type_id"]
-        if tid == 16 and not show_goals:   continue
-        if tid == 15 and not show_on_tgt:  continue
-        if tid == 14 and not show_post:    continue
-        if tid == 13 and not show_off_tgt: continue
+        tid=s["type_id"]
+        if tid==16 and not show_goals:   continue
+        if tid==15 and not show_on_tgt:  continue
+        if tid==14 and not show_post:    continue
+        if tid==13 and not show_off_tgt: continue
         out.append(s)
     return out
 
-def f_touches(data):
-    return [t for t in data if t["season"] in selected_seasons]
+def f_season(data): return [d for d in data if d["season"] in selected_seasons]
 
-def f_def(data):
-    return [d for d in data if d["season"] in selected_seasons
-            and d["action"] in sel_def]
-
-# ── season label ──────────────────────────────────────────────────────────────
+def f_def(data): return [d for d in data if d["season"] in selected_seasons and d["action"] in sel_def]
 
 def season_label():
-    if not selected_seasons:
-        return "No season selected"
-    if len(selected_seasons) == len(seasons_available):
-        return "All Seasons"
-    return " · ".join(s.replace("WSL ", "") for s in selected_seasons)
+    if not selected_seasons:          return "No season selected"
+    if len(selected_seasons)==len(seasons_available): return "All Seasons"
+    return " · ".join(s.replace("WSL ","") for s in selected_seasons)
 
 # ── metric row ────────────────────────────────────────────────────────────────
 
-def metric_row(fp, fs, fd):
-    total_p = len(fp)
-    succ_p  = sum(1 for p in fp if p["outcome"] == 1)
-    goals   = sum(1 for s in fs if s["type_id"] == 16)
-    shots_t = len(fs)
-
+def metric_row(fp, fs, fd, extra=None):
+    total_p = len(fp); succ_p = sum(1 for p in fp if p["outcome"]==1)
+    goals   = sum(1 for s in fs if s["type_id"]==16)
     cols = st.columns(8)
-    metrics = [
+    data_m = [
         ("Passes",        f"{total_p:,}"),
         ("Pass Acc",      f"{round(succ_p/total_p*100,1) if total_p else 0}%"),
         ("Progressive",   f"{sum(1 for p in fp if p['progressive']):,}"),
         ("Shot Assists",  f"{sum(1 for p in fp if p['key_pass']):,}"),
-        ("Shots",         f"{shots_t:,}"),
+        ("Shots",         f"{len(fs):,}"),
         ("Goals",         f"{goals:,}"),
         ("Tackles",       f"{sum(1 for d in fd if d['action']=='Tackle'):,}"),
         ("Interceptions", f"{sum(1 for d in fd if d['action']=='Interception'):,}"),
     ]
-    for col, (label, val) in zip(cols, metrics):
-        col.metric(label, val)
+    for col,(lbl,val) in zip(cols,data_m):
+        col.metric(lbl,val)
 
-# ── pitch factory ─────────────────────────────────────────────────────────────
+# ── sonar helper ──────────────────────────────────────────────────────────────
 
-def make_pitch(vertical=False, half=False, figsize=(16, 10), line_zorder=1):
-    cls = VerticalPitch if vertical else Pitch
-    kwargs = dict(
-        pitch_type="opta",
-        pitch_color=PITCH_BG,
-        line_color=PITCH_LINE,
-        linewidth=1.0,
-        goal_type="box",
-        line_zorder=line_zorder,
-    )
-    if vertical:
-        kwargs["half"] = half
-    pitch = cls(**kwargs)
-    fig, ax = pitch.draw(figsize=figsize)
-    fig.patch.set_facecolor(FIG_BG)
-    ax.set_facecolor(PITCH_BG)
-    return pitch, fig, ax
+def draw_sonar(ax, player_passes, title, highlight=False, fontsize_title=10):
+    N = 16
+    bins  = np.linspace(-np.pi, np.pi, N+1)
+    theta = bins[:-1] + (bins[1]-bins[0])/2
+    succ  = np.zeros(N); fail = np.zeros(N)
+    avg_d = np.zeros(N); cnt  = np.zeros(N)
+    for p in player_passes:
+        a = np.radians(p["angle"])
+        b = int((a+np.pi)/(2*np.pi)*N) % N
+        if p["outcome"]==1: succ[b]+=1
+        else:               fail[b]+=1
+        avg_d[b]+=p["dist"]; cnt[b]+=1
+    avg_d = np.where(cnt>0, avg_d/cnt, 0)
+    mx = max(succ+fail) or 1
+    w  = 2*np.pi/N*0.88
+    ax.bar(theta, fail,        width=w, color=C_ORANGE, alpha=.55, zorder=2, linewidth=0)
+    ax.bar(theta, succ, bottom=fail, width=w, color=C_YELLOW, alpha=.85, zorder=3, linewidth=0)
+    valid = cnt>0
+    if valid.any():
+        scaled = avg_d[valid]*(mx/(avg_d[valid].max() or 1))*0.55
+        ax.scatter(theta[valid], scaled, s=8, color=C_BLUE, zorder=5, alpha=.8)
+    for bidx,lbl in {0:"→",4:"↑",8:"←",12:"↓"}.items():
+        ax.text(theta[bidx], mx*1.28, lbl, ha="center", va="center",
+                fontsize=9, color="#8b949e", fontweight="bold")
+    ax.set_theta_zero_location("E"); ax.set_theta_direction(1)
+    ax.set_ylim(0, mx*1.45); ax.set_yticks([]); ax.set_xticks([])
+    ax.set_facecolor("#161b22"); ax.spines["polar"].set_visible(False)
+    total = int(succ.sum()+fail.sum())
+    acc   = round(succ.sum()/total*100) if total else 0
+    ax.set_title(f"{title}\n{total} passes · {acc}% acc",
+                 color=C_YELLOW if highlight else "#e6edf3",
+                 fontsize=fontsize_title,
+                 fontweight="bold" if highlight else "normal", pad=8)
 
-def add_title(fig, title, subtitle=""):
-    fig.text(0.5, 0.98, title, ha="center", va="top",
-             fontsize=14, fontweight="800", color="#e6edf3",
-             fontfamily="DejaVu Sans")
-    if subtitle:
-        fig.text(0.5, 0.945, subtitle, ha="center", va="top",
-                 fontsize=9, color="#8b949e")
-
-def legend(ax, items, loc="lower left"):
-    handles = [mpatches.Patch(color=c, label=l) for c, l in items]
-    ax.legend(handles=handles, loc=loc, fontsize=8.5,
-              framealpha=0.35, facecolor="#161b22",
-              edgecolor="#30363d", labelcolor="#c9d1d9",
-              handlelength=1.2, borderpad=0.7, labelspacing=0.5)
-
-# ── header ────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# HEADER
+# ═══════════════════════════════════════════════════════════════════════════════
 
 st.markdown(f"""
 <div style='display:flex;align-items:baseline;gap:12px;margin-bottom:4px'>
-  <span style='font-size:26px;font-weight:800;color:#e6edf3;letter-spacing:-0.5px'>Beth Mead</span>
+  <span style='font-size:26px;font-weight:800;color:#e6edf3;letter-spacing:-.5px'>Beth Mead</span>
   <span style='font-size:13px;color:#8b949e;font-weight:500'>WSL Analytics Dashboard</span>
 </div>
 <div style='font-size:12px;color:#484f58;margin-bottom:16px'>{season_label()}</div>
 """, unsafe_allow_html=True)
 
-# ── tabs ──────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# TABS
+# ═══════════════════════════════════════════════════════════════════════════════
 
-tabs = st.tabs([
-    "🎯  Pass Map",
-    "🥅  Shot Map",
-    "🔥  Heat Map",
-    "🗺  Territory",
-    "🔗  Pass Network",
-    "🧭  Pass Sonars",
-    "🛡  Defensive",
-    "📊  Percentile",
+(tab_pass, tab_shot, tab_heat, tab_terr, tab_net, tab_sonar,
+ tab_drib, tab_cross, tab_szones, tab_career, tab_match,
+ tab_radar, tab_style, tab_compare, tab_oppo, tab_def, tab_perc) = st.tabs([
+    "🎯 Pass Map",    "🥅 Shot Map",    "🔥 Heat Map",    "🗺 Territory",
+    "🔗 Pass Network","🧭 Pass Sonars", "🏃 Dribbles",    "↗️ Crossings",
+    "🎯 Shot Zones",  "📈 Career",      "📅 Match Stats", "🍕 Radar",
+    "📏 Style",       "🔄 Season Compare","🆚 Opposition", "🛡 Defensive",
+    "📊 Percentile",
 ])
-tab_pass, tab_shot, tab_heat, tab_terr, tab_net, tab_sonar, tab_def, tab_perc = tabs
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 1 – PASS MAP
+# 1 – PASS MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-
 with tab_pass:
-    fp = f_passes(passes)
-    fs = f_shots(shots)
-    fd = f_def(def_acts)
-    metric_row(fp, fs, fd)
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    pitch, fig, ax = make_pitch(figsize=(16, 10))
-    SORT = {"unsuccessful": 0, "successful": 1, "progressive": 2, "key": 3}
-
-    for p in sorted(fp, key=lambda p: SORT[pass_type(p)]):
-        pt    = pass_type(p)
-        color = PASS_COLOR[pt]
-        alpha = 0.28 if pt == "unsuccessful" else (0.82 if pt in ("key","progressive") else 0.52)
-        pitch.arrows(p["x"], p["y"], p["end_x"], p["end_y"],
-                     ax=ax, color=color, alpha=alpha,
-                     width=1.1, headwidth=4, headlength=4)
-
-    items = []
-    if show_succ:   items.append((PASS_COLOR["successful"],   "Successful"))
-    if show_unsucc: items.append((PASS_COLOR["unsuccessful"], "Unsuccessful"))
-    if show_prog:   items.append((PASS_COLOR["progressive"],  "Progressive"))
-    if show_key:    items.append((PASS_COLOR["key"],          "Shot Assist"))
-    if items: legend(ax, items)
-
-    add_title(fig, "Pass Map  ·  B. Mead",
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    pitch,fig,ax = make_pitch(figsize=(16,10))
+    ORDER={"unsuccessful":0,"successful":1,"progressive":2,"key":3}
+    for p in sorted(fp, key=lambda p:ORDER[pass_type(p)]):
+        pt=pass_type(p); color=PASS_COLOR[pt]
+        alpha=0.28 if pt=="unsuccessful" else (0.82 if pt in ("key","progressive") else 0.52)
+        pitch.arrows(p["x"],p["y"],p["end_x"],p["end_y"],ax=ax,color=color,
+                     alpha=alpha,width=1.1,headwidth=4,headlength=4)
+    items=[]
+    if show_succ:   items.append((PASS_COLOR["successful"],  "Successful"))
+    if show_unsucc: items.append((PASS_COLOR["unsuccessful"],"Unsuccessful"))
+    if show_prog:   items.append((PASS_COLOR["progressive"], "Progressive"))
+    if show_key:    items.append((PASS_COLOR["key"],         "Shot Assist"))
+    if items: add_legend(ax,items)
+    add_title(fig,"Pass Map  ·  B. Mead",
               f"{season_label()}  ·  {len(fp):,} passes  ·  "
               f"{sum(1 for p in fp if p['progressive']):,} progressive  ·  "
               f"{sum(1 for p in fp if p['key_pass']):,} shot assists")
-    plt.tight_layout(rect=[0, 0, 1, 0.94])
-    st.pyplot(fig, use_container_width=True)
-    plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 2 – SHOT MAP
+# 2 – SHOT MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-
 with tab_shot:
-    fp = f_passes(passes)
-    fs = f_shots(shots)
-    fd = f_def(def_acts)
-    metric_row(fp, fs, fd)
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    pitch = VerticalPitch(
-        pitch_type="opta", pitch_color=PITCH_BG, line_color=PITCH_LINE,
-        linewidth=1.0, goal_type="box", half=True, line_zorder=2,
-    )
-    fig, ax = pitch.draw(figsize=(10, 8))
-    fig.patch.set_facecolor(FIG_BG)
-
-    for tid in (13, 14, 15, 16):
-        color, marker, size, alpha, zorder = SHOT_STYLE[tid]
-        subset = [s for s in fs if s["type_id"] == tid]
-        if subset:
-            pitch.scatter(
-                [s["x"] for s in subset], [s["y"] for s in subset],
-                ax=ax, c=color, marker=marker, s=size,
-                alpha=alpha, zorder=zorder,
-                edgecolors="white", linewidths=0.3,
-            )
-
-    counts = {tid: sum(1 for s in fs if s["type_id"] == tid) for tid in (16,15,14,13)}
-    legend(ax, [
-        (SHOT_STYLE[16][0], f"Goal ({counts[16]})"),
-        (SHOT_STYLE[15][0], f"On Target ({counts[15]})"),
-        (SHOT_STYLE[14][0], f"Post ({counts[14]})"),
-        (SHOT_STYLE[13][0], f"Off Target ({counts[13]})"),
-    ], loc="lower center")
-
-    add_title(fig, "Shot Map  ·  B. Mead",
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    pitch=VerticalPitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
+                        linewidth=1.0,goal_type="box",half=True,line_zorder=2)
+    fig,ax=pitch.draw(figsize=(10,8)); fig.patch.set_facecolor(FIG_BG)
+    for tid in (13,14,15,16):
+        color,marker,size,alpha,zorder=SHOT_STYLE[tid]
+        sub=[s for s in fs if s["type_id"]==tid]
+        if sub:
+            pitch.scatter([s["x"] for s in sub],[s["y"] for s in sub],ax=ax,
+                          c=color,marker=marker,s=size,alpha=alpha,zorder=zorder,
+                          edgecolors="white",linewidths=.3)
+    counts={tid:sum(1 for s in fs if s["type_id"]==tid) for tid in (16,15,14,13)}
+    add_legend(ax,[(SHOT_STYLE[16][0],f"Goal ({counts[16]})"),
+                   (SHOT_STYLE[15][0],f"On Target ({counts[15]})"),
+                   (SHOT_STYLE[14][0],f"Post ({counts[14]})"),
+                   (SHOT_STYLE[13][0],f"Off Target ({counts[13]})")], loc="lower center")
+    add_title(fig,"Shot Map  ·  B. Mead",
               f"{season_label()}  ·  {len(fs)} shots  ·  {counts[16]} goals")
-    plt.tight_layout(rect=[0, 0, 1, 0.94])
-    st.pyplot(fig, use_container_width=True)
-    plt.close(fig)
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3 – HEAT MAP
+# 3 – HEAT MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-
 with tab_heat:
-    fp = f_passes(passes)
-    fs = f_shots(shots)
-    fd = f_def(def_acts)
-    ft = f_touches(touches)
-    metric_row(fp, fs, fd)
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    pitch = Pitch(
-        pitch_type="opta", pitch_color=PITCH_BG, line_color=PITCH_LINE,
-        linewidth=1.2, goal_type="box", line_zorder=2,
-    )
-    fig, ax = pitch.draw(figsize=(16, 10))
-    fig.patch.set_facecolor(FIG_BG)
-
-    xs = [t["x"] for t in ft]
-    ys = [t["y"] for t in ft]
-
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts); ft=f_season(touches)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
+                linewidth=1.2,goal_type="box",line_zorder=2)
+    fig,ax=pitch.draw(figsize=(16,10)); fig.patch.set_facecolor(FIG_BG)
+    xs=[t["x"] for t in ft]; ys=[t["y"] for t in ft]
     if xs:
-        cmap = LinearSegmentedColormap.from_list(
-            "mead_heat", [PITCH_BG, "#1a3a2a", "#3fb950", "#e3b341", "#f78166", "#ffffff"], N=256
-        )
-        pitch.kdeplot(xs, ys, ax=ax, cmap=cmap, fill=True,
-                      levels=100, alpha=0.88, bw_adjust=0.65, zorder=1)
-
-    add_title(fig, "Heat Map  ·  B. Mead  (all actions)",
-              f"{season_label()}  ·  {len(ft):,} actions")
-    plt.tight_layout(rect=[0, 0, 1, 0.94])
-    st.pyplot(fig, use_container_width=True)
-    plt.close(fig)
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 4 – TERRITORY MAP
-# ═══════════════════════════════════════════════════════════════════════════════
-
-with tab_terr:
-    fp = f_passes(passes)
-    fs = f_shots(shots)
-    fd = f_def(def_acts)
-    ft = f_touches(touches)
-    metric_row(fp, fs, fd)
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    pitch = Pitch(
-        pitch_type="opta", pitch_color=PITCH_BG, line_color=PITCH_LINE,
-        linewidth=1.2, goal_type="box", line_zorder=2,
-    )
-    fig, ax = pitch.draw(figsize=(16, 10))
-    fig.patch.set_facecolor(FIG_BG)
-
-    if ft:
-        xs = np.array([t["x"] for t in ft])
-        ys = np.array([t["y"] for t in ft])
-
-        # Bin into 12 × 8 zones and count actions per zone
-        bin_stat = pitch.bin_statistic(xs, ys, statistic="count", bins=(12, 8))
-
-        cmap_terr = LinearSegmentedColormap.from_list(
-            "terr", ["#0d1117", "#0d2137", "#1a4a7a", "#58a6ff", "#e3b341"], N=256
-        )
-        pitch.heatmap(bin_stat, ax=ax, cmap=cmap_terr, alpha=0.85, zorder=1)
-
-        # Annotate each zone with the count
-        pitch.label_heatmap(
-            bin_stat, ax=ax,
-            color="#e6edf3", fontsize=7, ha="center", va="center",
-            str_format="{:.0f}", zorder=3,
-        )
-
-    add_title(fig, "Territory Map  ·  B. Mead",
-              f"{season_label()}  ·  action count per zone  ·  {len(ft):,} total actions")
-
-    # colorbar
-    sm = plt.cm.ScalarMappable(
         cmap=LinearSegmentedColormap.from_list(
-            "terr", ["#0d1117", "#0d2137", "#1a4a7a", "#58a6ff", "#e3b341"], N=256),
-        norm=plt.Normalize(vmin=0, vmax=max(
-            bin_stat["statistic"].max(), 1))
-    )
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, orientation="vertical",
-                        fraction=0.018, pad=0.02)
-    cbar.ax.yaxis.set_tick_params(color="#8b949e", labelsize=8)
-    cbar.outline.set_edgecolor("#30363d")
-    plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="#8b949e")
-
-    plt.tight_layout(rect=[0, 0, 1, 0.94])
-    st.pyplot(fig, use_container_width=True)
-    plt.close(fig)
+            "heat",[PITCH_BG,"#1a3a2a","#3fb950","#e3b341","#f78166","#ffffff"],N=256)
+        pitch.kdeplot(xs,ys,ax=ax,cmap=cmap,fill=True,levels=100,alpha=.88,bw_adjust=.65,zorder=1)
+    add_title(fig,"Heat Map  ·  B. Mead  (all actions)",
+              f"{season_label()}  ·  {len(ft):,} actions")
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 4 – TERRITORY MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 5 – PASS NETWORK
-# ═══════════════════════════════════════════════════════════════════════════════
+with tab_terr:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts); ft=f_season(touches)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
+                linewidth=1.2,goal_type="box",line_zorder=2)
+    fig,ax=pitch.draw(figsize=(16,10)); fig.patch.set_facecolor(FIG_BG)
+    if ft:
+        xs=np.array([t["x"] for t in ft]); ys=np.array([t["y"] for t in ft])
+        bs=pitch.bin_statistic(xs,ys,statistic="count",bins=(12,8))
+        cm=LinearSegmentedColormap.from_list("terr",
+           ["#0d1117","#0d2137","#1a4a7a",C_BLUE,C_YELLOW],N=256)
+        pitch.heatmap(bs,ax=ax,cmap=cm,alpha=.85,zorder=1)
+        pitch.label_heatmap(bs,ax=ax,color="#e6edf3",fontsize=7,
+                            ha="center",va="center",str_format="{:.0f}",zorder=3)
+        sm=plt.cm.ScalarMappable(cmap=cm,norm=plt.Normalize(0,max(bs["statistic"].max(),1)))
+        sm.set_array([])
+        cbar=fig.colorbar(sm,ax=ax,orientation="vertical",fraction=.018,pad=.02)
+        cbar.ax.yaxis.set_tick_params(color="#8b949e",labelsize=8)
+        cbar.outline.set_edgecolor("#30363d")
+        plt.setp(plt.getp(cbar.ax.axes,"yticklabels"),color="#8b949e")
+    add_title(fig,"Territory Map  ·  B. Mead",
+              f"{season_label()}  ·  action count per zone  ·  {len(ft):,} total")
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5 – PASS NETWORK
+# ═══════════════════════════════════════════════════════════════════════════════
 with tab_net:
-    fp = f_passes(passes)
-    fs = f_shots(shots)
-    fd = f_def(def_acts)
-    metric_row(fp, fs, fd)
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    # ── filter by selected seasons ────────────────────────────────────────
-    edges_f = [e for e in net_edges if e["season"] in selected_seasons]
-    pos_f   = [p for p in net_pos   if p["season"] in selected_seasons]
-
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    edges_f=[e for e in net_edges if e["season"] in selected_seasons]
+    pos_f  =[p for p in net_pos   if p["season"] in selected_seasons]
     if not edges_f:
-        st.info("No pass network data for the selected season(s).")
+        st.info("No pass network data for selected season(s).")
     else:
-        from collections import defaultdict, Counter
-        import numpy as np
-
-        # Average position per player
-        avg_pos = defaultdict(lambda: {"x": [], "y": []})
-        for p in pos_f:
-            avg_pos[p["player"]]["x"].append(p["x"])
-            avg_pos[p["player"]]["y"].append(p["y"])
-        avg_pos = {
-            pl: (np.mean(v["x"]), np.mean(v["y"]))
-            for pl, v in avg_pos.items()
-        }
-
-        # Pass counts: directional edge → combine both directions
-        pair_counts = Counter()
-        for e in edges_f:
-            pair = tuple(sorted([e["passer"], e["recipient"]]))
-            pair_counts[pair] += 1
-
-        # Per-player total passes (for node size)
-        player_pass_count = Counter()
-        for e in edges_f:
-            player_pass_count[e["passer"]] += 1
-
-        # Keep only players who appear in avg_pos
-        players = [p for p in avg_pos if player_pass_count[p] > 0]
-
-        # Min edge count threshold (top connections only to avoid clutter)
-        min_edge = max(2, int(np.percentile(list(pair_counts.values()), 30)))
-
-        # ── draw ──────────────────────────────────────────────────────────
-        pitch = Pitch(
-            pitch_type="opta", pitch_color=PITCH_BG, line_color="#2d333b",
-            linewidth=0.8, goal_type="box", line_zorder=1,
-        )
-        fig, ax = pitch.draw(figsize=(16, 10))
-        fig.patch.set_facecolor(FIG_BG)
-
-        max_edge_cnt = max(pair_counts.values()) if pair_counts else 1
-        max_node_cnt = max(player_pass_count[p] for p in players) if players else 1
-
-        # ── edges ─────────────────────────────────────────────────────────
-        for (p1, p2), cnt in pair_counts.items():
-            if cnt < min_edge:
-                continue
-            if p1 not in avg_pos or p2 not in avg_pos:
-                continue
-            x1, y1 = avg_pos[p1]
-            x2, y2 = avg_pos[p2]
-            width  = 0.8 + 5.0 * (cnt / max_edge_cnt)
-            alpha  = 0.25 + 0.55 * (cnt / max_edge_cnt)
-            is_mead_edge = "B. Mead" in (p1, p2)
-            color  = ACCENT_BLUE if is_mead_edge else "#484f58"
-            ax.plot([x1, x2], [y1, y2],
-                    color=color, linewidth=width, alpha=alpha,
-                    solid_capstyle="round", zorder=2)
-
-        # ── nodes ─────────────────────────────────────────────────────────
+        avg_pos=defaultdict(lambda:{"x":[],"y":[]})
+        for p in pos_f: avg_pos[p["player"]]["x"].append(p["x"]); avg_pos[p["player"]]["y"].append(p["y"])
+        avg_pos={pl:(np.mean(v["x"]),np.mean(v["y"])) for pl,v in avg_pos.items()}
+        pair_counts=Counter()
+        for e in edges_f: pair_counts[tuple(sorted([e["passer"],e["recipient"]]))]+=1
+        player_pass=Counter(e["passer"] for e in edges_f)
+        players=[p for p in avg_pos if player_pass[p]>0]
+        min_edge=max(2,int(np.percentile(list(pair_counts.values()),30)))
+        pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color="#2d333b",
+                    linewidth=.8,goal_type="box",line_zorder=1)
+        fig,ax=pitch.draw(figsize=(16,10)); fig.patch.set_facecolor(FIG_BG)
+        mx_e=max(pair_counts.values()) or 1; mx_n=max(player_pass[p] for p in players) if players else 1
+        for (p1,p2),cnt in pair_counts.items():
+            if cnt<min_edge or p1 not in avg_pos or p2 not in avg_pos: continue
+            x1,y1=avg_pos[p1]; x2,y2=avg_pos[p2]
+            color=C_BLUE if "B. Mead" in (p1,p2) else "#484f58"
+            ax.plot([x1,x2],[y1,y2],color=color,
+                    linewidth=.8+5*(cnt/mx_e),alpha=.25+.55*(cnt/mx_e),
+                    solid_capstyle="round",zorder=2)
         for pl in players:
-            if pl not in avg_pos:
-                continue
-            x, y   = avg_pos[pl]
-            cnt    = player_pass_count[pl]
-            is_mead = pl == "B. Mead"
-            size   = 100 + 700 * (cnt / max_node_cnt)
-            color  = ACCENT_YLW if is_mead else "#c9d1d9"
-            edge_c = "#0d1117"
-            lw     = 2.5 if is_mead else 1.0
-
-            ax.scatter(x, y, s=size, c=color, zorder=4,
-                       edgecolors=edge_c, linewidths=lw)
-
-            # label
-            label = pl.split(". ")[-1] if ". " in pl else pl
-            fontsize  = 9.5 if is_mead else 7.5
-            fontweight = "bold" if is_mead else "normal"
-            fcolor     = ACCENT_YLW if is_mead else "#e6edf3"
-
-            # offset label so it doesn't sit on top of node
-            ax.text(x, y + 3.5, label,
-                    ha="center", va="bottom",
-                    fontsize=fontsize, fontweight=fontweight,
-                    color=fcolor, zorder=5,
-                    bbox=dict(boxstyle="round,pad=0.2",
-                              facecolor="#0d1117", alpha=0.6,
-                              edgecolor="none"))
-
-        # ── legend ────────────────────────────────────────────────────────
-        legend(ax, [
-            (ACCENT_YLW,  "B. Mead"),
-            ("#c9d1d9",   "Teammate"),
-            (ACCENT_BLUE, "Mead connection"),
-            ("#484f58",   "Other connection"),
-        ])
-
-        # subtitle stats
-        top_partner = max(
-            [(p, c) for (p1, p2), c in pair_counts.items()
-             for p in ([p1] if p2 == "B. Mead" else ([p2] if p1 == "B. Mead" else []))],
-            key=lambda x: x[1], default=("—", 0)
-        )
-        total_mead_passes = sum(
-            c for (p1, p2), c in pair_counts.items() if "B. Mead" in (p1, p2)
-        )
-
-        add_title(
-            fig, "Pass Network  ·  B. Mead",
-            f"{season_label()}  ·  Node size = passes played  ·  "
-            f"Edge width = pass volume  ·  Top partner: {top_partner[0]} ({top_partner[1]})"
-        )
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
-        st.pyplot(fig, use_container_width=True)
-        plt.close(fig)
+            if pl not in avg_pos: continue
+            x,y=avg_pos[pl]; is_mead=(pl=="B. Mead")
+            ax.scatter(x,y,s=100+700*(player_pass[pl]/mx_n),
+                       c=C_YELLOW if is_mead else "#c9d1d9",
+                       zorder=4,edgecolors="#0d1117",linewidths=2.5 if is_mead else 1.0)
+            label=pl.split(". ")[-1] if ". " in pl else pl
+            ax.text(x,y+3.5,label,ha="center",va="bottom",
+                    fontsize=9.5 if is_mead else 7.5,
+                    fontweight="bold" if is_mead else "normal",
+                    color=C_YELLOW if is_mead else "#e6edf3",zorder=5,
+                    bbox=dict(boxstyle="round,pad=.2",facecolor="#0d1117",alpha=.6,edgecolor="none"))
+        add_legend(ax,[(C_YELLOW,"B. Mead"),(("#c9d1d9"),"Teammate"),
+                       (C_BLUE,"Mead connection"),("#484f58","Other")])
+        top=max([(p,c) for (p1,p2),c in pair_counts.items()
+                 for p in ([p1] if p2=="B. Mead" else ([p2] if p1=="B. Mead" else []))],
+                key=lambda x:x[1],default=("—",0))
+        add_title(fig,"Pass Network  ·  B. Mead",
+                  f"{season_label()}  ·  node size = passes  ·  top partner: {top[0]} ({top[1]})")
+        plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 6 – PASS SONARS
+# 6 – PASS SONARS
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def draw_sonar(ax, player_passes, title, highlight=False, fontsize_title=10):
-    """Draw a pass direction sonar on a given polar Axes."""
-    import numpy as np
-
-    N_BINS   = 16
-    bin_size = 360 / N_BINS
-    bins     = np.linspace(-np.pi, np.pi, N_BINS + 1)
-    theta    = bins[:-1] + (bins[1] - bins[0]) / 2   # bin centres
-
-    succ_counts = np.zeros(N_BINS)
-    fail_counts = np.zeros(N_BINS)
-    avg_dist    = np.zeros(N_BINS)
-    dist_count  = np.zeros(N_BINS)
-
-    for p in player_passes:
-        a = np.radians(p["angle"])
-        # find bin
-        b = int((a + np.pi) / (2 * np.pi) * N_BINS) % N_BINS
-        if p["outcome"] == 1:
-            succ_counts[b] += 1
-        else:
-            fail_counts[b] += 1
-        avg_dist[b]   += p["dist"]
-        dist_count[b] += 1
-
-    avg_dist = np.where(dist_count > 0, avg_dist / dist_count, 0)
-    max_cnt  = max(succ_counts + fail_counts) or 1
-
-    width = 2 * np.pi / N_BINS * 0.88
-
-    # background rings
-    for r in [0.25, 0.5, 0.75, 1.0]:
-        ring = plt.Circle((0, 0), r * max_cnt, transform=ax.transData._b,
-                           fill=False, color="#30363d", linewidth=0.4, zorder=0)
-
-    # unsuccessful (bottom layer)
-    ax.bar(theta, fail_counts,
-           width=width, bottom=0,
-           color=ACCENT_ORG, alpha=0.55, zorder=2, linewidth=0)
-
-    # successful stacked on top
-    ax.bar(theta, succ_counts,
-           width=width, bottom=fail_counts,
-           color=ACCENT_YLW, alpha=0.85, zorder=3, linewidth=0)
-
-    # average distance dot ring
-    valid = dist_count > 0
-    ax.scatter(theta[valid], avg_dist[valid] * (max_cnt / (avg_dist[valid].max() or 1)) * 0.55,
-               s=8, color=ACCENT_BLUE, zorder=5, alpha=0.8)
-
-    # direction labels
-    dir_labels = {
-        0:  "→",   # forward
-        4:  "↑",   # left / up
-        8:  "←",   # back
-        12: "↓",   # right / down
-    }
-    for bidx, lbl in dir_labels.items():
-        ax.text(theta[bidx], max_cnt * 1.25, lbl,
-                ha="center", va="center", fontsize=9,
-                color="#8b949e", fontweight="bold")
-
-    # grid / style
-    ax.set_theta_zero_location("E")
-    ax.set_theta_direction(1)
-    ax.set_ylim(0, max_cnt * 1.4)
-    ax.set_yticks([])
-    ax.set_xticks([])
-    ax.set_facecolor("#161b22")
-    ax.spines["polar"].set_visible(False)
-
-    total = int(succ_counts.sum() + fail_counts.sum())
-    acc   = round(succ_counts.sum() / total * 100) if total else 0
-    title_color = ACCENT_YLW if highlight else "#e6edf3"
-    ax.set_title(
-        f"{title}\n"
-        f"{'─'*len(title)}\n"
-        f"{total} passes · {acc}% acc",
-        color=title_color, fontsize=fontsize_title,
-        fontweight="bold" if highlight else "normal",
-        pad=8, loc="center",
-    )
-
-
 with tab_sonar:
-    fp = f_passes(passes)
-    fs = f_shots(shots)
-    fd = f_def(def_acts)
-    metric_row(fp, fs, fd)
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    import numpy as np
-    from collections import Counter, defaultdict
-
-    sp_f = [p for p in sonar_passes if p["season"] in selected_seasons]
-
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    sp_f=[p for p in sonar_passes if p["season"] in selected_seasons]
     if not sp_f:
-        st.info("No sonar data for the selected season(s).")
+        st.info("No sonar data for selected season(s).")
     else:
-        mead_sp = [p for p in sp_f if p["player"] == "B. Mead"]
-
-        # ── large Mead sonar ──────────────────────────────────────────────
-        fig_m = plt.figure(figsize=(6, 6), facecolor=FIG_BG)
-        ax_m  = fig_m.add_subplot(111, projection="polar")
-        draw_sonar(ax_m, mead_sp, "B. Mead", highlight=True, fontsize_title=12)
-
-        # legend inside the big sonar
-        import matplotlib.patches as mp
-        handles = [
-            mp.Patch(color=ACCENT_YLW, label="Successful"),
-            mp.Patch(color=ACCENT_ORG, label="Unsuccessful"),
-            mp.Patch(color=ACCENT_BLUE, label="Avg distance (scaled)"),
-        ]
-        ax_m.legend(handles=handles, loc="lower center",
-                    bbox_to_anchor=(0.5, -0.18), ncol=3,
-                    fontsize=7.5, framealpha=0.0,
-                    labelcolor="#c9d1d9", handlelength=1.2)
-
-        fig_m.suptitle(
-            f"Pass Sonar  ·  B. Mead  ·  {season_label()}\n"
-            f"→ = Forward (attacking)   ← = Backward   ↑↓ = Wide",
-            color="#8b949e", fontsize=8, y=0.02,
-        )
+        mead_sp=[p for p in sp_f if p["player"]=="B. Mead"]
+        fig_m=plt.figure(figsize=(6,6),facecolor=FIG_BG)
+        ax_m=fig_m.add_subplot(111,projection="polar")
+        draw_sonar(ax_m,mead_sp,"B. Mead",highlight=True,fontsize_title=12)
+        ax_m.legend(handles=[mpatches.Patch(color=C_YELLOW,label="Successful"),
+                              mpatches.Patch(color=C_ORANGE,label="Unsuccessful"),
+                              mpatches.Patch(color=C_BLUE,  label="Avg distance")],
+                    loc="lower center",bbox_to_anchor=(.5,-.18),ncol=3,
+                    fontsize=7.5,framealpha=0,labelcolor="#c9d1d9",handlelength=1.2)
+        fig_m.suptitle(f"Pass Sonar  ·  B. Mead  ·  {season_label()}\n"
+                       "→ Forward  ← Backward  ↑↓ Wide",color="#8b949e",fontsize=8,y=.02)
         plt.tight_layout()
-
-        # center the big sonar
-        _, mid, _ = st.columns([1, 2, 1])
-        with mid:
-            st.pyplot(fig_m, use_container_width=True)
+        _,mid,_=st.columns([1,2,1])
+        with mid: st.pyplot(fig_m,use_container_width=True)
         plt.close(fig_m)
-
-        st.markdown("<hr>", unsafe_allow_html=True)
-
-        # ── mini sonars for top partners ──────────────────────────────────
-        # Find top pass partners (based on net_edges filtered by season)
-        edges_f = [e for e in net_edges if e["season"] in selected_seasons]
-        pair_counts = Counter()
-        for e in edges_f:
-            pair = tuple(sorted([e["passer"], e["recipient"]]))
-            pair_counts[pair] += 1
-
-        top_partners = sorted(
-            [p for (p1, p2), _ in pair_counts.most_common()
-             for p in ([p1] if p2 == "B. Mead" else ([p2] if p1 == "B. Mead" else []))],
-            key=lambda p: -pair_counts[tuple(sorted([p, "B. Mead"]))]
-        )
-        # deduplicate keeping order
-        seen = set()
-        top_partners_unique = []
-        for p in top_partners:
-            if p not in seen and p != "B. Mead":
-                seen.add(p)
-                top_partners_unique.append(p)
-        top_partners_unique = top_partners_unique[:8]
-
-        if top_partners_unique:
-            st.markdown(
-                "<div style='font-size:13px;font-weight:700;color:#8b949e;"
-                "text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px'>"
-                "Top Pass Partners — Direction Wheels</div>",
-                unsafe_allow_html=True,
-            )
-
-            cols_per_row = 4
-            for row_start in range(0, len(top_partners_unique), cols_per_row):
-                row_players = top_partners_unique[row_start:row_start + cols_per_row]
-                cols = st.columns(cols_per_row)
-                for col, partner in zip(cols, row_players):
+        st.markdown("<hr>",unsafe_allow_html=True)
+        edges_f=[e for e in net_edges if e["season"] in selected_seasons]
+        pair_counts=Counter(tuple(sorted([e["passer"],e["recipient"]])) for e in edges_f)
+        top_p=[]
+        for (p1,p2),_ in pair_counts.most_common():
+            for p in ([p1] if p2=="B. Mead" else ([p2] if p1=="B. Mead" else [])):
+                if p not in top_p: top_p.append(p)
+        top_p=[p for p in top_p if p!="B. Mead"][:8]
+        if top_p:
+            st.markdown("<div style='font-size:13px;font-weight:700;color:#8b949e;"
+                        "text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px'>"
+                        "Top Pass Partners — Direction Wheels</div>",unsafe_allow_html=True)
+            for row_s in [top_p[i:i+4] for i in range(0,len(top_p),4)]:
+                cols=st.columns(4)
+                for col,partner in zip(cols,row_s):
                     with col:
-                        partner_passes = [p for p in sp_f if p["player"] == partner]
-                        fig_p, ax_p = plt.subplots(
-                            figsize=(3.2, 3.2), subplot_kw={"projection": "polar"},
-                            facecolor=FIG_BG,
-                        )
-                        short_name = partner.split(". ")[-1] if ". " in partner else partner
-                        edge_cnt = pair_counts.get(
-                            tuple(sorted([partner, "B. Mead"])), 0
-                        )
-                        draw_sonar(ax_p, partner_passes,
-                                   f"{short_name}\n({edge_cnt} passes w/ Mead)",
-                                   fontsize_title=8)
-                        plt.tight_layout()
-                        st.pyplot(fig_p, use_container_width=True)
-                        plt.close(fig_p)
-
-# TAB 7 – DEFENSIVE ACTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-with tab_def:
-    fp = f_passes(passes)
-    fs = f_shots(shots)
-    fd = f_def(def_acts)
-    metric_row(fp, fs, fd)
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    pitch, fig, ax = make_pitch(figsize=(16, 10))
-    MARKER = {"Tackle": "s", "Interception": "D", "Clearance": "o", "Block": "^"}
-
-    for d in fd:
-        ax.scatter(d["x"], d["y"],
-                   c=DEF_COLOR[d["action"]], marker=MARKER[d["action"]],
-                   s=90, alpha=0.80, zorder=3,
-                   edgecolors="#0d1117", linewidths=0.5)
-
-    if sel_def:
-        legend(ax, [
-            (DEF_COLOR[a], f"{a} ({sum(1 for d in fd if d['action']==a)})")
-            for a in sel_def
-        ])
-
-    add_title(fig, "Defensive Actions  ·  B. Mead",
-              f"{season_label()}  ·  {len(fd)} actions")
-    plt.tight_layout(rect=[0, 0, 1, 0.94])
-    st.pyplot(fig, use_container_width=True)
-    plt.close(fig)
+                        pp=[p for p in sp_f if p["player"]==partner]
+                        fig_p,ax_p=plt.subplots(figsize=(3.2,3.2),
+                            subplot_kw={"projection":"polar"},facecolor=FIG_BG)
+                        sn=partner.split(". ")[-1] if ". " in partner else partner
+                        ec=pair_counts.get(tuple(sorted([partner,"B. Mead"])),0)
+                        draw_sonar(ax_p,pp,f"{sn}\n({ec} w/ Mead)",fontsize_title=8)
+                        plt.tight_layout(); st.pyplot(fig_p,use_container_width=True); plt.close(fig_p)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 6 – PERCENTILE CHART
+# 7 – DRIBBLE MAP
 # ═══════════════════════════════════════════════════════════════════════════════
+with tab_drib:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    dr=f_season(dribbles)
+    succ_d=sum(1 for d in dr if d["outcome"]==1)
+    total_d=len(dr)
+    c1,c2,c3=st.columns(3)
+    c1.metric("Total Take-Ons", f"{total_d:,}")
+    c2.metric("Successful",     f"{succ_d:,}")
+    c3.metric("Success Rate",   f"{round(succ_d/total_d*100,1) if total_d else 0}%")
+    st.markdown("<hr>",unsafe_allow_html=True)
+    pitch,fig,ax=make_pitch(figsize=(16,10))
+    for d in dr:
+        color=C_GREEN if d["outcome"]==1 else C_ORANGE
+        alpha=.80 if d["outcome"]==1 else .50
+        ax.scatter(d["x"],d["y"],c=color,s=80,alpha=alpha,
+                   zorder=3,edgecolors="#0d1117",linewidths=.5)
+    add_legend(ax,[(C_GREEN,f"Successful ({succ_d})"),(C_ORANGE,f"Unsuccessful ({total_d-succ_d})")])
+    add_title(fig,"Dribble / Take-On Map  ·  B. Mead",
+              f"{season_label()}  ·  {total_d} take-ons  ·  {round(succ_d/total_d*100,1) if total_d else 0}% success rate")
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
 
-with tab_perc:
-    st.markdown(
-        "<div style='font-size:12px;color:#8b949e;margin-bottom:12px'>"
-        "Bars show each season relative to Mead's personal best (100 = best season for that metric)."
-        "</div>", unsafe_allow_html=True
-    )
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8 – CROSSING MAP
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_cross:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    # crosses: passes from wide channels (y<25 or y>75) into final third (end_x>67)
+    all_p=f_season(passes)
+    crosses=[p for p in all_p if (p["y"]<25 or p["y"]>75) and p["end_x"]>67]
+    succ_c=sum(1 for c in crosses if c["outcome"]==1)
+    c1,c2,c3=st.columns(3)
+    c1.metric("Crosses",    f"{len(crosses):,}")
+    c2.metric("Successful", f"{succ_c:,}")
+    c3.metric("Success Rate",f"{round(succ_c/len(crosses)*100,1) if crosses else 0}%")
+    st.markdown("<hr>",unsafe_allow_html=True)
+    pitch,fig,ax=make_pitch(figsize=(16,10))
+    for c in crosses:
+        color=C_BLUE if c["outcome"]==1 else C_ORANGE
+        alpha=.75 if c["outcome"]==1 else .40
+        pitch.arrows(c["x"],c["y"],c["end_x"],c["end_y"],ax=ax,
+                     color=color,alpha=alpha,width=1.2,headwidth=4,headlength=4)
+    add_legend(ax,[(C_BLUE,f"Successful ({succ_c})"),(C_ORANGE,f"Unsuccessful ({len(crosses)-succ_c})")])
+    add_title(fig,"Crossing Map  ·  B. Mead",
+              f"{season_label()}  ·  passes from wide channels into final third  ·  {len(crosses)} crosses")
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
 
-    season_stats = {}
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9 – SHOT ZONES
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_szones:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    pitch=VerticalPitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
+                        linewidth=1.0,goal_type="box",half=True,line_zorder=2)
+    fig,ax=pitch.draw(figsize=(10,9)); fig.patch.set_facecolor(FIG_BG)
+    fs_all=f_season(shots)
+    if fs_all:
+        xs=np.array([s["x"] for s in fs_all]); ys=np.array([s["y"] for s in fs_all])
+        bs=pitch.bin_statistic(xs,ys,statistic="count",bins=(6,5))
+        cm=LinearSegmentedColormap.from_list("sz",
+           ["#0d1117","#1a3a2a",C_GREEN,C_YELLOW,C_ORANGE],N=256)
+        pitch.heatmap(bs,ax=ax,cmap=cm,alpha=.75,zorder=1)
+        pitch.label_heatmap(bs,ax=ax,color="#e6edf3",fontsize=9,
+                            ha="center",va="center",str_format="{:.0f}",zorder=3)
+    # overlay individual shots
+    for tid in (13,14,15,16):
+        color,marker,size,alpha,zorder=SHOT_STYLE[tid]
+        sub=[s for s in fs if s["type_id"]==tid]
+        if sub:
+            pitch.scatter([s["x"] for s in sub],[s["y"] for s in sub],
+                          ax=ax,c=color,marker=marker,s=size*.7,
+                          alpha=alpha,zorder=zorder+1,edgecolors="#0d1117",linewidths=.3)
+    counts={tid:sum(1 for s in fs if s["type_id"]==tid) for tid in (16,15,14,13)}
+    add_legend(ax,[(SHOT_STYLE[16][0],f"Goal ({counts[16]})"),
+                   (SHOT_STYLE[15][0],f"On Target ({counts[15]})"),
+                   (SHOT_STYLE[14][0],f"Post ({counts[14]})"),
+                   (SHOT_STYLE[13][0],f"Off Target ({counts[13]})")],loc="lower center")
+    add_title(fig,"Shot Zones  ·  B. Mead",
+              f"{season_label()}  ·  zone count + individual shots overlaid")
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10 – CAREER TIMELINE
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_career:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    career = {}
     for s in seasons_available:
-        sp = [p for p in passes   if p["season"] == s]
-        ss = [sh for sh in shots  if sh["season"] == s]
-        sd = [d  for d  in def_acts if d["season"] == s]
-        total_p = len(sp)
-        season_stats[s] = {
-            "Passes":        total_p,
-            "Pass Acc %":    round(sum(1 for p in sp if p["outcome"]==1)/total_p*100,1) if total_p else 0,
+        sp=[p for p in passes   if p["season"]==s]
+        ss=[sh for sh in shots  if sh["season"]==s]
+        career[s]={
+            "Goals":       sum(1 for sh in ss if sh["type_id"]==16),
+            "Shot Assists":sum(1 for p  in sp if p["key_pass"]),
+            "Shots":       len(ss),
+            "Passes":      len(sp),
+            "Progressive": sum(1 for p  in sp if p["progressive"]),
+            "Dribbles":    sum(1 for d  in dribbles if d["season"]==s),
+        }
+    slabels=[s.replace("WSL ","") for s in seasons_available]
+    fig,axes=plt.subplots(2,3,figsize=(16,8),facecolor=FIG_BG)
+    fig.patch.set_facecolor(FIG_BG)
+    metrics_career=["Goals","Shot Assists","Shots","Passes","Progressive","Dribbles"]
+    colors_career=[C_YELLOW,C_BLUE,C_ORANGE,C_GREEN,C_GREEN,C_PURPLE]
+    for ax,(metric,color) in zip(axes.flat,zip(metrics_career,colors_career)):
+        vals=[career[s][metric] for s in seasons_available]
+        ax.fill_between(range(len(slabels)),vals,color=color,alpha=.25)
+        ax.plot(range(len(slabels)),vals,color=color,linewidth=2.5,marker="o",
+                markersize=6,markerfacecolor=FIG_BG,markeredgewidth=2)
+        for i,v in enumerate(vals):
+            ax.text(i,v+max(vals)*.04,str(v),ha="center",color=color,
+                    fontsize=8,fontweight="bold")
+        ax.set_xticks(range(len(slabels))); ax.set_xticklabels(slabels,rotation=45,
+                    ha="right",color="#8b949e",fontsize=7.5)
+        ax.set_facecolor("#161b22"); ax.set_title(metric,color=color,fontsize=11,fontweight="700",pad=8)
+        ax.tick_params(colors="#484f58"); ax.yaxis.set_tick_params(labelcolor="#8b949e",labelsize=8)
+        for sp in ax.spines.values(): sp.set_color("#30363d"); sp.set_linewidth(.5)
+        ax.grid(axis="y",color="#21262d",linewidth=.5,zorder=0)
+    fig.suptitle(f"Career Timeline  ·  B. Mead  ·  {season_label()}",
+                 color="#e6edf3",fontsize=14,fontweight="800",y=.98)
+    plt.tight_layout(rect=[0,0,1,.95]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 11 – MATCH BY MATCH
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_match:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    mr_f=[r for r in match_rows if r["season"] in selected_seasons]
+    mr_f.sort(key=lambda r:r["date"])
+    if not mr_f:
+        st.info("No match data for selected season(s).")
+    else:
+        import pandas as pd
+        stat_choice=st.selectbox("Metric",
+            ["passes","succ_passes","shots","goals","key_passes","prog_passes",
+             "dribbles","succ_dribbles","tackles","interceptions"],
+            format_func=lambda x: x.replace("_"," ").title())
+        fig,ax=plt.subplots(figsize=(max(12,len(mr_f)*.45),5),facecolor=FIG_BG)
+        ax.set_facecolor("#161b22")
+        vals=[r[stat_choice] for r in mr_f]
+        labels=[f"{r['date'][5:]}  {r['opponent'][:12]}" for r in mr_f]
+        colors=[C_YELLOW if v==max(vals) else C_BLUE for v in vals]
+        bars=ax.bar(range(len(vals)),vals,color=colors,alpha=.85,width=.7,edgecolor="none")
+        avg=np.mean(vals)
+        ax.axhline(avg,color=C_ORANGE,linewidth=1.5,linestyle="--",label=f"Avg {avg:.1f}",alpha=.8)
+        ax.legend(fontsize=9,framealpha=0,labelcolor="#c9d1d9")
+        for i,v in enumerate(vals):
+            if v>0: ax.text(i,v+.05,str(v),ha="center",va="bottom",color="#e6edf3",fontsize=6.5)
+        ax.set_xticks(range(len(vals))); ax.set_xticklabels(labels,rotation=55,
+                ha="right",color="#8b949e",fontsize=6.5)
+        ax.set_title(f"{stat_choice.replace('_',' ').title()} per Match  ·  B. Mead  ·  {season_label()}",
+                     color="#e6edf3",fontsize=12,fontweight="800",pad=10)
+        ax.tick_params(colors="#484f58"); ax.yaxis.set_tick_params(labelcolor="#8b949e",labelsize=8)
+        for sp in ax.spines.values(): sp.set_color("#30363d"); sp.set_linewidth(.5)
+        ax.grid(axis="y",color="#21262d",linewidth=.5,zorder=0)
+        plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+
+        # data table
+        df=pd.DataFrame(mr_f)[["date","season","opponent",
+            "passes","succ_passes","shots","goals","key_passes","prog_passes",
+            "dribbles","succ_dribbles","tackles","interceptions"]]
+        df.columns=[c.replace("_"," ").title() for c in df.columns]
+        st.dataframe(df,use_container_width=True,hide_index=True)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 12 – RADAR / PIZZA CHART
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_radar:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    st.markdown("<div style='font-size:12px;color:#8b949e;margin-bottom:12px'>"
+                "Each season normalised to Mead's career best (100 = personal best). "
+                "Select up to 3 seasons to compare.</div>",unsafe_allow_html=True)
+
+    compare_seasons=st.multiselect("Compare seasons",seasons_available,
+                                   seasons_available[-3:] if len(seasons_available)>=3 else seasons_available,
+                                   max_selections=3,key="radar_sel")
+    if not compare_seasons:
+        st.info("Select at least one season.")
+    else:
+        radar_metrics=["Passes","Pass Acc%","Progressive","Shot Assists","Shots",
+                       "Goals","Shot Acc%","Tackles","Interceptions","Dribbles"]
+        season_vals={}
+        for s in seasons_available:
+            sp=[p for p in passes   if p["season"]==s]
+            ss=[sh for sh in shots  if sh["season"]==s]
+            sd=[d  for d  in def_acts if d["season"]==s]
+            sdr=[d for d in dribbles  if d["season"]==s]
+            tp=len(sp); ts=len(ss)
+            season_vals[s]=[
+                tp,
+                round(sum(1 for p in sp if p["outcome"]==1)/tp*100,1) if tp else 0,
+                sum(1 for p in sp if p["progressive"]),
+                sum(1 for p in sp if p["key_pass"]),
+                ts,
+                sum(1 for sh in ss if sh["type_id"]==16),
+                round(sum(1 for sh in ss if sh["type_id"] in (15,16))/ts*100,1) if ts else 0,
+                sum(1 for d in sd if d["action"]=="Tackle"),
+                sum(1 for d in sd if d["action"]=="Interception"),
+                len(sdr),
+            ]
+        max_v=[max(season_vals[s][i] for s in seasons_available) or 1 for i in range(len(radar_metrics))]
+        N=len(radar_metrics)
+        angles=np.linspace(0,2*np.pi,N,endpoint=False).tolist(); angles+=[angles[0]]
+        RADAR_COLORS=[C_YELLOW,C_BLUE,C_GREEN]
+        fig=plt.figure(figsize=(8,8),facecolor=FIG_BG)
+        ax=fig.add_subplot(111,projection="polar"); ax.set_facecolor("#161b22")
+        # background rings
+        for r in [.25,.5,.75,1.0]:
+            ax.plot(angles,[r*100]*len(angles),color="#30363d",linewidth=.5,zorder=0)
+            ax.fill(angles,[r*100]*len(angles),color="#161b22",zorder=0)
+        ax.fill(angles,[100]*len(angles),color="#21262d",alpha=.5,zorder=0)
+        for i,s in enumerate(compare_seasons):
+            vals=[season_vals[s][j]/max_v[j]*100 for j in range(N)]; vals+=[vals[0]]
+            color=RADAR_COLORS[i]
+            ax.plot(angles,vals,color=color,linewidth=2.2,zorder=3)
+            ax.fill(angles,vals,color=color,alpha=.15,zorder=2)
+            ax.scatter(angles[:-1],vals[:-1],s=60,color=color,zorder=5,
+                       edgecolors=FIG_BG,linewidths=1.5)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(radar_metrics,color="#c9d1d9",fontsize=9,fontweight="600")
+        ax.set_yticks([]); ax.set_ylim(0,115); ax.spines["polar"].set_color("#30363d")
+        ax.grid(False)
+        # ring labels
+        for r,lbl in [(25,"25%"),(50,"50%"),(75,"75%"),(100,"100%")]:
+            ax.text(0,r+2,lbl,ha="center",va="bottom",color="#484f58",fontsize=7)
+        ax.legend([mpatches.Patch(color=RADAR_COLORS[i],label=s.replace("WSL ",""))
+                   for i,s in enumerate(compare_seasons)],
+                  loc="lower center",bbox_to_anchor=(.5,-.12),ncol=len(compare_seasons),
+                  fontsize=9,framealpha=0,labelcolor="#c9d1d9",handlelength=1.5)
+        fig.suptitle(f"Performance Radar  ·  B. Mead\n100 = career best season",
+                     color="#e6edf3",fontsize=13,fontweight="800",y=.98)
+        plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 13 – STYLE ANALYSIS
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_style:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    all_p=f_season(passes); all_s=f_season(shots)
+    fig=plt.figure(figsize=(16,6),facecolor=FIG_BG)
+    gs=gridspec.GridSpec(1,3,figure=fig,wspace=.35)
+
+    # ── pass length histogram ──────────────────────────────────────────────
+    ax1=fig.add_subplot(gs[0]); ax1.set_facecolor("#161b22")
+    dists=[p["dist"] for p in all_p]
+    if dists:
+        bins=np.linspace(0,max(dists)+1,25)
+        succ_d=[p["dist"] for p in all_p if p["outcome"]==1]
+        fail_d=[p["dist"] for p in all_p if p["outcome"]==0]
+        ax1.hist(fail_d,bins=bins,color=C_ORANGE,alpha=.6,label="Unsuccessful",edgecolor="none")
+        ax1.hist(succ_d,bins=bins,color=C_YELLOW,alpha=.7,label="Successful",edgecolor="none")
+        ax1.axvline(np.mean(dists),color=C_BLUE,linewidth=1.5,linestyle="--",
+                    label=f"Mean {np.mean(dists):.1f}y")
+    ax1.set_title("Pass Length Distribution",color="#e6edf3",fontsize=11,fontweight="700",pad=8)
+    ax1.set_xlabel("Distance (pitch %)",color="#8b949e",fontsize=8)
+    ax1.set_ylabel("Count",color="#8b949e",fontsize=8)
+    ax1.legend(fontsize=8,framealpha=0,labelcolor="#c9d1d9")
+    ax1.tick_params(colors="#484f58"); ax1.yaxis.set_tick_params(labelcolor="#8b949e")
+    ax1.xaxis.set_tick_params(labelcolor="#8b949e")
+    for sp in ax1.spines.values(): sp.set_color("#30363d")
+    ax1.set_facecolor("#161b22"); ax1.grid(axis="y",color="#21262d",linewidth=.5)
+
+    # ── shooting foot donut ───────────────────────────────────────────────
+    ax2=fig.add_subplot(gs[1]); ax2.set_facecolor(FIG_BG)
+    foot_counts=Counter(s["foot"] for s in all_s)
+    if foot_counts:
+        labels_f=list(foot_counts.keys()); sizes=list(foot_counts.values())
+        donut_colors=[C_YELLOW,C_BLUE,C_GREEN,C_ORANGE,C_PURPLE][:len(labels_f)]
+        wedges,_=ax2.pie(sizes,labels=None,colors=donut_colors,
+                         startangle=90,wedgeprops=dict(width=.5,edgecolor=FIG_BG,linewidth=2))
+        for i,(lbl,sz) in enumerate(zip(labels_f,sizes)):
+            pct=round(sz/sum(sizes)*100,1)
+            ax2.text(0,-.05-i*.18,f"● {lbl}:  {sz} shots  ({pct}%)",
+                     ha="center",va="top",color=donut_colors[i],fontsize=9,fontweight="600",
+                     transform=ax2.transAxes)
+    ax2.set_title("Shooting Foot",color="#e6edf3",fontsize=11,fontweight="700",pad=8)
+
+    # ── pass direction breakdown ─────────────────────────────────────────
+    ax3=fig.add_subplot(gs[2]); ax3.set_facecolor("#161b22")
+    sp_mead=[p for p in sonar_passes if p["player"]=="B. Mead" and p["season"] in selected_seasons]
+    def dir_label(angle):
+        if -45<=angle<45:   return "Forward"
+        if 45<=angle<135:   return "Left"
+        if angle>=135 or angle<-135: return "Backward"
+        return "Right"
+    dir_counts=Counter(dir_label(p["angle"]) for p in sp_mead)
+    dir_order=["Forward","Left","Backward","Right"]
+    dir_colors=[C_GREEN,C_BLUE,C_ORANGE,C_PURPLE]
+    dir_vals=[dir_counts.get(d,0) for d in dir_order]
+    bars3=ax3.barh(dir_order,dir_vals,color=dir_colors,alpha=.85,edgecolor="none",height=.55)
+    for bar,v in zip(bars3,dir_vals):
+        ax3.text(bar.get_width()+max(dir_vals)*.01,bar.get_y()+bar.get_height()/2,
+                 str(v),va="center",color="#e6edf3",fontsize=9,fontweight="600")
+    ax3.set_title("Pass Direction",color="#e6edf3",fontsize=11,fontweight="700",pad=8)
+    ax3.set_xlabel("Passes",color="#8b949e",fontsize=8)
+    ax3.tick_params(colors="#484f58"); ax3.yaxis.set_tick_params(labelcolor="#c9d1d9")
+    ax3.xaxis.set_tick_params(labelcolor="#8b949e")
+    for sp in ax3.spines.values(): sp.set_color("#30363d")
+    ax3.grid(axis="x",color="#21262d",linewidth=.5)
+
+    fig.suptitle(f"Style Analysis  ·  B. Mead  ·  {season_label()}",
+                 color="#e6edf3",fontsize=14,fontweight="800",y=1.02)
+    plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 14 – SEASON COMPARE
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_compare:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    c1,c2=st.columns(2)
+    with c1: s1=st.selectbox("Season A",seasons_available,
+                              index=max(0,len(seasons_available)-2),key="cmp1")
+    with c2: s2=st.selectbox("Season B",seasons_available,
+                              index=len(seasons_available)-1,key="cmp2")
+    fig,axes=plt.subplots(1,2,figsize=(16,9),facecolor=FIG_BG)
+    for ax,season,label,color in zip(axes,[s1,s2],["A","B"],[C_YELLOW,C_BLUE]):
+        sp=[p for p in passes if p["season"]==season]
+        pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
+                    linewidth=.9,goal_type="box",line_zorder=1)
+        pitch.draw(ax=ax)
+        ax.set_facecolor(PITCH_BG)
+        ORDER={"unsuccessful":0,"successful":1,"progressive":2,"key":3}
+        for p in sorted(sp,key=lambda p:ORDER[pass_type(p)]):
+            pt=pass_type(p); c=PASS_COLOR[pt]
+            alpha=0.25 if pt=="unsuccessful" else (0.80 if pt in ("key","progressive") else 0.45)
+            pitch.arrows(p["x"],p["y"],p["end_x"],p["end_y"],ax=ax,
+                         color=c,alpha=alpha,width=1.0,headwidth=3.5,headlength=3.5)
+        total=len(sp); succ=sum(1 for p in sp if p["outcome"]==1)
+        ax.set_title(f"{season.replace('WSL ','')}  ·  {total} passes  ·  "
+                     f"{round(succ/total*100,1) if total else 0}% acc",
+                     color=color,fontsize=11,fontweight="700",pad=8)
+    fig.suptitle(f"Season Comparison  ·  B. Mead",
+                 color="#e6edf3",fontsize=14,fontweight="800",y=.98)
+    plt.tight_layout(rect=[0,0,1,.95]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 15 – OPPOSITION BREAKDOWN
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_oppo:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    mr_f=[r for r in match_rows if r["season"] in selected_seasons]
+    if not mr_f:
+        st.info("No data for selected season(s).")
+    else:
+        oppo_stats=defaultdict(lambda:defaultdict(int))
+        oppo_games=defaultdict(int)
+        for r in mr_f:
+            opp=r["opponent"]
+            oppo_games[opp]+=1
+            for k in ["passes","succ_passes","shots","goals","key_passes",
+                      "prog_passes","dribbles","tackles","interceptions"]:
+                oppo_stats[opp][k]+=r[k]
+        opps=sorted(oppo_games.keys())
+        stat_op=st.selectbox("Metric",
+            ["passes","shots","goals","key_passes","prog_passes","dribbles","tackles","interceptions"],
+            format_func=lambda x:x.replace("_"," ").title(),key="oppo_stat")
+        vals_op=[oppo_stats[o][stat_op] for o in opps]
+        games_op=[oppo_games[o] for o in opps]
+        fig,ax=plt.subplots(figsize=(max(12,len(opps)*.7),5),facecolor=FIG_BG)
+        ax.set_facecolor("#161b22")
+        sort_idx=np.argsort(vals_op)[::-1]
+        opps_s=[opps[i] for i in sort_idx]; vals_s=[vals_op[i] for i in sort_idx]
+        games_s=[games_op[i] for i in sort_idx]
+        colors_op=[C_YELLOW if v==max(vals_s) else C_BLUE for v in vals_s]
+        bars_op=ax.bar(range(len(vals_s)),vals_s,color=colors_op,alpha=.85,width=.7,edgecolor="none")
+        for i,(v,g) in enumerate(zip(vals_s,games_s)):
+            if v>0: ax.text(i,v+.05,f"{v}\n({g}g)",ha="center",va="bottom",
+                            color="#e6edf3",fontsize=7)
+        ax.set_xticks(range(len(opps_s)))
+        ax.set_xticklabels([o.replace(" WFC","").replace(" FCW","").replace(" FC","")
+                            for o in opps_s],rotation=45,ha="right",color="#8b949e",fontsize=8)
+        ax.set_title(f"{stat_op.replace('_',' ').title()} vs Each Opponent  ·  B. Mead  ·  {season_label()}",
+                     color="#e6edf3",fontsize=12,fontweight="800",pad=10)
+        ax.tick_params(colors="#484f58"); ax.yaxis.set_tick_params(labelcolor="#8b949e",labelsize=8)
+        for sp in ax.spines.values(): sp.set_color("#30363d")
+        ax.grid(axis="y",color="#21262d",linewidth=.5)
+        plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 16 – DEFENSIVE ACTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_def:
+    fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
+    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    pitch,fig,ax=make_pitch(figsize=(16,10))
+    MARKER={"Tackle":"s","Interception":"D","Clearance":"o","Block":"^"}
+    for d in fd:
+        ax.scatter(d["x"],d["y"],c=DEF_COLOR[d["action"]],marker=MARKER[d["action"]],
+                   s=90,alpha=.80,zorder=3,edgecolors="#0d1117",linewidths=.5)
+    if sel_def:
+        add_legend(ax,[(DEF_COLOR[a],f"{a} ({sum(1 for d in fd if d['action']==a)})")
+                       for a in sel_def])
+    add_title(fig,"Defensive Actions  ·  B. Mead",
+              f"{season_label()}  ·  {len(fd)} actions")
+    plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,use_container_width=True); plt.close(fig)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 17 – PERCENTILE CHART
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_perc:
+    st.markdown("<div style='font-size:12px;color:#8b949e;margin-bottom:12px'>"
+                "Bars show each season relative to Mead's personal best "
+                "(100 = best season for that metric).</div>",unsafe_allow_html=True)
+    season_stats={}
+    for s in seasons_available:
+        sp=[p for p in passes   if p["season"]==s]
+        ss=[sh for sh in shots  if sh["season"]==s]
+        sd=[d  for d  in def_acts if d["season"]==s]
+        sdr=[d for d in dribbles if d["season"]==s]
+        tp=len(sp); ts=len(ss)
+        season_stats[s]={
+            "Passes":        tp,
+            "Pass Acc %":    round(sum(1 for p in sp if p["outcome"]==1)/tp*100,1) if tp else 0,
             "Progressive":   sum(1 for p in sp if p["progressive"]),
             "Shot Assists":  sum(1 for p in sp if p["key_pass"]),
-            "Shots":         len(ss),
+            "Shots":         ts,
             "Goals":         sum(1 for sh in ss if sh["type_id"]==16),
-            "Shot Acc %":    round(sum(1 for sh in ss if sh["type_id"] in (15,16))/len(ss)*100,1) if ss else 0,
+            "Shot Acc %":    round(sum(1 for sh in ss if sh["type_id"] in (15,16))/ts*100,1) if ts else 0,
             "Tackles":       sum(1 for d in sd if d["action"]=="Tackle"),
             "Interceptions": sum(1 for d in sd if d["action"]=="Interception"),
+            "Dribbles":      len(sdr),
         }
-
-    metrics  = list(next(iter(season_stats.values())).keys())
-    max_vals = {m: max(season_stats[s][m] for s in season_stats) or 1 for m in metrics}
-
-    BAR_COLORS = [ACCENT_YLW, ACCENT_BLUE, ACCENT_GRN, "#58a6ff",
-                  ACCENT_ORG, ACCENT_YLW, ACCENT_GRN, ACCENT_ORG, ACCENT_PRP]
-
-    display_seasons = [s for s in seasons_available if s in selected_seasons]
-    cols_per_row    = min(len(display_seasons), 3)
-    rows_list       = [display_seasons[i:i+cols_per_row]
-                       for i in range(0, len(display_seasons), cols_per_row)]
-
-    for row_seasons in rows_list:
-        cols = st.columns(len(row_seasons))
-        for col, s in zip(cols, row_seasons):
+    metrics_p=list(next(iter(season_stats.values())).keys())
+    max_v={m:max(season_stats[s][m] for s in season_stats) or 1 for m in metrics_p}
+    BC=[C_YELLOW,C_BLUE,C_GREEN,C_ORANGE,C_ORANGE,C_YELLOW,C_GREEN,C_ORANGE,C_PURPLE,C_BLUE]
+    disp=[s for s in seasons_available if s in selected_seasons]
+    for row_s in [disp[i:i+3] for i in range(0,len(disp),3)]:
+        cols=st.columns(len(row_s))
+        for col,s in zip(cols,row_s):
             with col:
-                fig, ax = plt.subplots(figsize=(5, 4.8))
-                fig.patch.set_facecolor(FIG_BG)
+                fig,ax=plt.subplots(figsize=(5,4.8)); fig.patch.set_facecolor(FIG_BG)
                 ax.set_facecolor("#161b22")
-
-                vals  = [season_stats[s][m] for m in metrics]
-                pcts  = [v / max_vals[m] * 100 for v, m in zip(vals, metrics)]
-                y_pos = np.arange(len(metrics))
-
-                # background bars
-                ax.barh(y_pos, [100]*len(metrics), color="#21262d", height=0.6,
-                        edgecolor="none", zorder=1)
-                # value bars
-                bars = ax.barh(y_pos, pcts, color=BAR_COLORS[:len(metrics)],
-                               height=0.6, alpha=0.9, edgecolor="none", zorder=2)
-
-                for bar, val in zip(bars, vals):
-                    ax.text(bar.get_width() + 2, bar.get_y() + bar.get_height()/2,
-                            f"{val:g}", va="center", ha="left",
-                            color="#e6edf3", fontsize=7.5, fontweight="700")
-
-                ax.set_yticks(y_pos)
-                ax.set_yticklabels(metrics, color="#8b949e", fontsize=8)
-                ax.set_xlim(0, 120)
-                ax.set_xlabel("% of personal best", color="#484f58", fontsize=7)
-                ax.tick_params(colors="#484f58", labelsize=7)
-                for spine in ax.spines.values():
-                    spine.set_visible(False)
-                ax.axvline(100, color="#30363d", linewidth=0.8, linestyle="--", zorder=3)
-                ax.set_title(s.replace("WSL ", ""), color=ACCENT_BLUE,
-                             fontsize=10, fontweight="800", pad=10)
-                ax.set_facecolor("#161b22")
-
-                plt.tight_layout()
-                st.pyplot(fig, use_container_width=True)
-                plt.close(fig)
+                vals=[season_stats[s][m] for m in metrics_p]
+                pcts=[v/max_v[m]*100 for v,m in zip(vals,metrics_p)]
+                yp=np.arange(len(metrics_p))
+                ax.barh(yp,[100]*len(metrics_p),color="#21262d",height=.6,edgecolor="none",zorder=1)
+                bars=ax.barh(yp,pcts,color=BC[:len(metrics_p)],height=.6,alpha=.9,edgecolor="none",zorder=2)
+                for bar,v in zip(bars,vals):
+                    ax.text(bar.get_width()+2,bar.get_y()+bar.get_height()/2,
+                            f"{v:g}",va="center",ha="left",color="#e6edf3",fontsize=7.5,fontweight="700")
+                ax.set_yticks(yp); ax.set_yticklabels(metrics_p,color="#8b949e",fontsize=8)
+                ax.set_xlim(0,120); ax.set_xlabel("% of personal best",color="#484f58",fontsize=7)
+                ax.tick_params(colors="#484f58",labelsize=7)
+                for sp in ax.spines.values(): sp.set_visible(False)
+                ax.axvline(100,color="#30363d",linewidth=.8,linestyle="--",zorder=3)
+                ax.set_title(s.replace("WSL ",""),color=C_BLUE,fontsize=10,fontweight="800",pad=10)
+                plt.tight_layout(); st.pyplot(fig,use_container_width=True); plt.close(fig)
