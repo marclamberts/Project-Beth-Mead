@@ -331,20 +331,41 @@ with tab_shot:
     metric_row(fp, fs, ft, fd)
     st.markdown("---")
 
-    pitch, fig, ax = make_pitch(vertical=True, figsize=(9, 13))
+    # Vertical half-pitch (attacking end only) – use pitch.scatter so
+    # mplsoccer handles the coordinate transformation correctly.
+    pitch = VerticalPitch(
+        pitch_type="opta",
+        pitch_color=BG,
+        line_color=LINE_COLOR,
+        linewidth=1.2,
+        goal_type="box",
+        half=True,
+    )
+    fig, ax = pitch.draw(figsize=(10, 8))
+    fig.patch.set_facecolor(BG)
 
     SHOT_STYLE = {
-        16: ("#f5a623", "*", 240, 0.95, 4),  # goal        – orange star
-        15: ("#5bc8f5", "o", 110, 0.85, 3),  # on target   – light blue circle
-        14: ("#c084fc", "D",  90, 0.85, 3),  # post        – purple diamond
-        13: ("#e63946", "X",  80, 0.50, 2),  # off target  – red cross
+        16: ("#f5a623", "*", 300, 0.95, 4),  # goal        – orange star
+        15: ("#5bc8f5", "o", 130, 0.85, 3),  # on target   – light blue circle
+        14: ("#c084fc", "D", 110, 0.85, 3),  # post        – purple diamond
+        13: ("#e63946", "X",  90, 0.50, 2),  # off target  – red cross
     }
-    for s in fs:
-        color, marker, size, alpha, zorder = SHOT_STYLE[s["type_id"]]
-        ax.scatter(s["x"], s["y"], c=color, marker=marker, s=size,
-                   alpha=alpha, zorder=zorder, edgecolors="white", linewidths=0.4)
 
-    counts = {tid: sum(1 for s in fs if s["type_id"] == tid) for tid in (16,15,14,13)}
+    # Draw lower-priority shots first so goals sit on top
+    for tid in (13, 14, 15, 16):
+        color, marker, size, alpha, zorder = SHOT_STYLE[tid]
+        subset = [s for s in fs if s["type_id"] == tid]
+        if subset:
+            pitch.scatter(
+                [s["x"] for s in subset],
+                [s["y"] for s in subset],
+                ax=ax,
+                c=color, marker=marker, s=size,
+                alpha=alpha, zorder=zorder,
+                edgecolors="white", linewidths=0.4,
+            )
+
+    counts = {tid: sum(1 for s in fs if s["type_id"] == tid) for tid in (16, 15, 14, 13)}
     legend_items = [
         mpatches.Patch(color="#f5a623", label=f"Goal ({counts[16]})"),
         mpatches.Patch(color="#5bc8f5", label=f"On Target / Saved ({counts[15]})"),
@@ -357,7 +378,7 @@ with tab_shot:
 
     add_title(fig, "Shot Map — B. Mead",
               f"{season_label()}  ·  {len(fs)} shots  ·  {sum(1 for s in fs if s['type_id']==16)} goals")
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
