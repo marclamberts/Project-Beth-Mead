@@ -33,8 +33,6 @@ def get_qualifier(event, qid):
 def has_qualifier(event, qid):
     return any(q["qualifierId"] == qid for q in event.get("qualifier", []))
 
-def normalize(x, y, flip):
-    return (100 - x, 100 - y) if flip else (x, y)
 
 # ── data loading ──────────────────────────────────────────────────────────────
 
@@ -68,10 +66,6 @@ def load_data():
         if arsenal_id is None:
             continue
 
-        teams_part  = fname.replace(".json", "").split("_", 1)[1] if "_" in fname else fname
-        home_team   = teams_part.split(" - ")[0].strip()
-        is_home     = "Arsenal" in home_team
-
         for e in events:
             if e.get("playerName") != "B. Mead":
                 continue
@@ -85,10 +79,9 @@ def load_data():
             if x is None or y is None:
                 continue
 
-            flip       = (not is_home and period == 1) or (is_home and period == 2)
-            nx, ny     = normalize(x, y, flip)
-
-            base_rec = dict(x=nx, y=ny, season=season, outcome=outcome, period=period)
+            # Opta stores each event in the acting team's own coordinate frame
+            # (x=0 own goal, x=100 opponent goal) — no normalisation needed.
+            base_rec = dict(x=x, y=y, season=season, outcome=outcome, period=period)
 
             # ── passes ────────────────────────────────────────────────────────
             if tid == 1:
@@ -96,9 +89,9 @@ def load_data():
                 ey = get_qualifier(e, 141)
                 if ex is None or ey is None:
                     continue
-                end_x, end_y = normalize(float(ex), float(ey), flip)
+                end_x, end_y = float(ex), float(ey)
                 is_key  = has_qualifier(e, 210)
-                is_prog = outcome == 1 and end_x - nx >= 10 and end_x > 50
+                is_prog = outcome == 1 and end_x - x >= 10 and end_x > 50
                 passes.append({**base_rec,
                     "end_x": end_x, "end_y": end_y,
                     "key_pass": is_key, "progressive": is_prog})
