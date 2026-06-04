@@ -103,12 +103,10 @@ def load_data():
                     "end_x": end_x, "end_y": end_y,
                     "key_pass": is_key, "progressive": is_prog})
 
-            # ── shots (miss=13, post=14, saved=15, goal=16) ───────────────────
+            # ── shots ─────────────────────────────────────────────────────────
+            # 13=off target, 14=post, 15=on target (saved), 16=goal
             elif tid in (13, 14, 15, 16):
-                is_goal   = tid == 16
-                on_target = tid in (15, 16)
-                shots.append({**base_rec,
-                    "is_goal": is_goal, "on_target": on_target, "type_id": tid})
+                shots.append({**base_rec, "type_id": tid})
 
             # ── all touches / heat ────────────────────────────────────────────
             elif tid in (1, 2, 3, 4, 7, 8, 12, 13, 14, 15, 16, 43, 44, 45, 49, 50, 61, 74):
@@ -153,9 +151,10 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("🥅 Shot Filters")
-    show_goals    = st.checkbox("Goals",         value=True)
-    show_on_tgt   = st.checkbox("On Target",     value=True)
-    show_off_tgt  = st.checkbox("Off Target",    value=True)
+    show_goals    = st.checkbox("Goals (16)",          value=True)
+    show_on_tgt   = st.checkbox("On Target / Saved (15)", value=True)
+    show_post     = st.checkbox("Post (14)",           value=True)
+    show_off_tgt  = st.checkbox("Off Target (13)",     value=True)
 
     st.markdown("---")
     st.subheader("🛡 Defensive Filters")
@@ -184,9 +183,11 @@ def f_shots(data):
     out = []
     for s in data:
         if s["season"] not in selected_seasons: continue
-        if s["is_goal"]                   and not show_goals:   continue
-        if s["on_target"] and not s["is_goal"] and not show_on_tgt:  continue
-        if not s["on_target"]             and not show_off_tgt: continue
+        tid = s["type_id"]
+        if tid == 16 and not show_goals:   continue
+        if tid == 15 and not show_on_tgt:  continue
+        if tid == 14 and not show_post:    continue
+        if tid == 13 and not show_off_tgt: continue
         out.append(s)
     return out
 
@@ -231,7 +232,7 @@ def metric_row(fp, fs, ft, fd):
     succ_p  = sum(1 for p in fp if p["outcome"] == 1)
     prog_p  = sum(1 for p in fp if p["progressive"])
     key_p   = sum(1 for p in fp if p["key_pass"])
-    goals   = sum(1 for s in fs if s["is_goal"])
+    goals   = sum(1 for s in fs if s["type_id"] == 16)
     shots_t = len(fs)
     tackles = sum(1 for d in fd if d["action"] == "Tackle")
     intercepts = sum(1 for d in fd if d["action"] == "Interception")
@@ -339,28 +340,30 @@ with tab_shot:
 
     pitch, fig, ax = make_pitch(vertical=True, figsize=(9, 13))
 
+    SHOT_STYLE = {
+        16: ("#f5a623", "*", 240, 0.95, 4),  # goal        – orange star
+        15: ("#5bc8f5", "o", 110, 0.85, 3),  # on target   – light blue circle
+        14: ("#c084fc", "D",  90, 0.85, 3),  # post        – purple diamond
+        13: ("#e63946", "X",  80, 0.50, 2),  # off target  – red cross
+    }
     for s in fs:
-        if s["is_goal"]:
-            color, marker, size, alpha, zorder = "#f5a623", "*", 220, 0.95, 4
-        elif s["on_target"]:
-            color, marker, size, alpha, zorder = "#5bc8f5", "o", 100, 0.80, 3
-        else:
-            color, marker, size, alpha, zorder = "#e63946", "X", 80, 0.55, 2
-
+        color, marker, size, alpha, zorder = SHOT_STYLE[s["type_id"]]
         ax.scatter(s["x"], s["y"], c=color, marker=marker, s=size,
                    alpha=alpha, zorder=zorder, edgecolors="white", linewidths=0.4)
 
+    counts = {tid: sum(1 for s in fs if s["type_id"] == tid) for tid in (16,15,14,13)}
     legend_items = [
-        mpatches.Patch(color="#f5a623", label=f"Goal ({sum(1 for s in fs if s['is_goal'])})"),
-        mpatches.Patch(color="#5bc8f5", label=f"On Target ({sum(1 for s in fs if s['on_target'] and not s['is_goal'])})"),
-        mpatches.Patch(color="#e63946", label=f"Off Target ({sum(1 for s in fs if not s['on_target'])})"),
+        mpatches.Patch(color="#f5a623", label=f"Goal ({counts[16]})"),
+        mpatches.Patch(color="#5bc8f5", label=f"On Target / Saved ({counts[15]})"),
+        mpatches.Patch(color="#c084fc", label=f"Post ({counts[14]})"),
+        mpatches.Patch(color="#e63946", label=f"Off Target ({counts[13]})"),
     ]
     ax.legend(handles=legend_items, loc="lower center", fontsize=9,
               framealpha=0.25, facecolor=BG, edgecolor="white",
               labelcolor="white", handlelength=1.5, borderpad=0.7)
 
     add_title(fig, "Shot Map — B. Mead",
-              f"{season_label()}  ·  {len(fs)} shots  ·  {sum(1 for s in fs if s['is_goal'])} goals")
+              f"{season_label()}  ·  {len(fs)} shots  ·  {sum(1 for s in fs if s['type_id']==16)} goals")
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
@@ -452,8 +455,8 @@ with tab_perc:
             "Progressive":   sum(1 for p in sp if p["progressive"]),
             "Shot Assists":  sum(1 for p in sp if p["key_pass"]),
             "Shots":         len(ss),
-            "Goals":         sum(1 for sh in ss if sh["is_goal"]),
-            "Shot Acc %":    round(sum(1 for sh in ss if sh["on_target"]) / len(ss) * 100, 1) if ss else 0,
+            "Goals":         sum(1 for sh in ss if sh["type_id"] == 16),
+            "Shot Acc %":    round(sum(1 for sh in ss if sh["type_id"] in (15, 16)) / len(ss) * 100, 1) if ss else 0,
             "Tackles":       sum(1 for d in sd if d["action"] == "Tackle"),
             "Interceptions": sum(1 for d in sd if d["action"] == "Interception"),
         }
