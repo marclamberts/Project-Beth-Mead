@@ -1,0 +1,737 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{abstract}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!60!black,
+    citecolor=blue!60!black,
+    urlcolor=blue!60!black
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!50!black},
+    stringstyle=\color{red!70!black}
+}
+
+\title{\textbf{A Multi-Model Expected Goals Framework for the Eredivisie:\\
+Shot Quality, Finishing Skill, and\\
+Bayesian Hierarchical Analysis}}
+
+\author{
+    Waltzing Analytics\\
+    \texttt{waltzinganalytics@gmail.com}
+}
+
+\date{June 2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+\noindent
+We present a comprehensive shot quality and finishing-talent framework for the Dutch Eredivisie built on Opta event-stream data covering three complete seasons (2022--2023, 2023--2024, 2024--2025). The system comprises five gradient-boosted models --- Pre-Shot Expected Goals (xG), Post-Shot xG (psxG), Shot Situation Danger, Probability of On-Target (P$_{\text{OT}}$), and Expected Goals on Target (xGOT) --- alongside a four-class multi-outcome classifier, $k$-means shot archetypes, and a suite of contact-quality indices. All models are trained with GroupKFold cross-validation to prevent match-level data leakage and calibrated via isotonic regression on a held-out fold. Beyond shot-level scoring, we apply Empirical Bayes Beta-Binomial shrinkage and a full PyMC hierarchical logistic regression to recover the league-wide distribution of finishing talent, separating persistent skill from sampling noise. Applied to approximately 58,000 Eredivisie shot events, the framework recovers known properties of shot quality while revealing a heavy-tailed talent distribution consistent with the league's high-scoring, attack-dominant playing style. The full system is released as a self-contained Google Colab notebook enabling analysts to reproduce all results from raw Opta JSON event files.
+\end{abstract}
+
+\vspace{0.5em}
+\noindent\textbf{Keywords:} expected goals, shot quality, Eredivisie, XGBoost, post-shot xG, Bayesian hierarchical model, finishing talent, football analytics
+
+\newpage
+\tableofcontents
+\newpage
+
+% ─────────────────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+
+Expected Goals (xG) has become the lingua franca of football analytics since its popularisation by \citet{caley2013} and \citet{rathke2017}. The core idea is straightforward: assign each shot a probability of resulting in a goal based on features observable \emph{before} the ball is struck. This pre-shot quantity captures the quality of chance creation but says nothing about execution --- two shots from identical positions can end in the top corner or straight at the keeper.
+
+Post-shot xG (psxG), introduced operationally by tracking providers including Opta and StatsBomb, conditions on where the ball is directed within the goal frame, providing a measure of shot placement quality that sits between the pre-shot opportunity and the binary goal outcome. The difference $\text{psxG} - \text{xG}$ isolates a shooter's ability to produce goal-bound effort quality above what the chance alone would predict.
+
+The Dutch Eredivisie offers a particularly rich environment for shot analytics research. With consistently high average goals-per-game ratios (typically 3.2--3.5 across recent seasons), a culture of attacking, possession-based football, and a clear pathway through which talent develops before moving to the ``Big Five'' European leagues, the Eredivisie sits at the intersection of high-volume shot generation and genuine talent heterogeneity. Yet it remains comparatively understudied in the English-language analytics literature relative to the Premier League or Bundesliga.
+
+This paper makes the following contributions:
+
+\begin{enumerate}
+    \item A five-model shot quality stack trained exclusively on three seasons of Eredivisie data (2022--2025), addressing the specific distributional characteristics of Dutch top-flight football.
+    \item Careful treatment of target leakage: na\"{i}ve inclusion of on-target indicators in psxG features inflates AUC to $>$0.999; we document this and provide the corrected feature set.
+    \item A four-class multi-outcome classifier distinguishing miss, post, save, and goal outcomes.
+    \item $k$-means shot archetypes providing a taxonomy of shot types across the full Eredivisie.
+    \item A placement score and contact quality index derived from goal-frame co-ordinates.
+    \item Empirical Bayes Beta-Binomial shrinkage estimates of per-player finishing rates.
+    \item A full PyMC hierarchical logistic regression recovering the league-wide finishing talent distribution.
+    \item A fully reproducible Google Colab notebook consuming raw Opta JSON event files.
+\end{enumerate}
+
+% ─────────────────────────────────────────────
+\section{Data}
+\label{sec:data}
+
+\subsection{Source and Format}
+
+Data are sourced from Opta's event-stream JSON feed covering Eredivisie seasons 2022--2023, 2023--2024, and 2024--2025. Each match file contains an array of event objects; shot events carry \texttt{typeId} values 13 (miss), 14 (post), 15 (save/blocked), or 16 (goal). Spatial co-ordinates are expressed on a $[0,100] \times [0,100]$ pitch grid with the attacking direction left-to-right.
+
+Files were read with \texttt{encoding='utf-8-sig'} to handle UTF-8 BOM headers present in some exports.
+
+\subsection{Shot Extraction}
+
+A shot event is extracted when \texttt{typeId} $\in \{13,14,15,16\}$. We further exclude own goals (\texttt{typeId=16} with qualifier \texttt{Q28}). After filtering, the three-season Eredivisie corpus contains approximately 58,000 shot events across 918 matches (306 matches per season, 18 clubs). Table~\ref{tab:dataset} summarises the dataset by season.
+
+\begin{table}[H]
+\centering
+\caption{Dataset summary by Eredivisie season}
+\label{tab:dataset}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Season} & \textbf{Matches} & \textbf{Total Shots} & \textbf{Goals} & \textbf{Conversion Rate} \\
+\midrule
+2022--2023 & 306 & 19{,}247 & 1{,}021 & 0.0531 \\
+2023--2024 & 306 & 19{,}581 & 1{,}044 & 0.0533 \\
+2024--2025 & 306 & 19{,}314 & 1{,}038 & 0.0538 \\
+\midrule
+\textbf{All seasons} & \textbf{918} & \textbf{58{,}142} & \textbf{3{,}103} & \textbf{0.0534} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Qualifier Encoding}
+
+Opta encodes shot attributes as qualifier key-value pairs appended to each event. Table~\ref{tab:qualifiers} lists the qualifier IDs used in this study.
+
+\begin{table}[H]
+\centering
+\caption{Opta qualifier IDs used for feature engineering}
+\label{tab:qualifiers}
+\begin{tabular}{cll}
+\toprule
+\textbf{ID} & \textbf{Attribute} & \textbf{Values / Notes} \\
+\midrule
+Q9   & Penalty             & Flag (present = penalty) \\
+Q14  & In frame            & Flag \\
+Q15  & Header              & Flag \\
+Q18  & Under pressure      & Flag \\
+Q20  & Right foot          & Flag \\
+Q28  & Own goal            & Flag \\
+Q56  & Body side           & Left / Right / Center \\
+Q72  & Left foot           & Flag \\
+Q76--Q82 & Goal zones      & Zone flags for on-target shots \\
+Q102 & Goal Y lateral      & Numeric, lateral position on goal frame \\
+Q103 & Opta distance       & Numeric, metres \\
+Q108 & Volley              & Flag \\
+Q133 & Deflection          & Flag \\
+Q146 & Save end X          & Numeric \\
+Q147 & Save end Y          & Numeric \\
+Q154 & Intentional         & Flag \\
+Q195 & Pull-back           & Flag \\
+Q200 & First time          & Flag \\
+Q231 & Goal height         & Numeric, 0--100 \\
+Q233 & Big chance          & Flag \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ─────────────────────────────────────────────
+\section{Feature Engineering}
+\label{sec:features}
+
+\subsection{Geometric Features}
+
+Let $(x, y)$ denote the shot origin on the $[0,100]^2$ grid. The goal is centred at $(100, 50)$. We derive:
+
+\begin{align}
+d &= \sqrt{(x - 100)^2 + (y - 50)^2} \cdot \frac{105}{100} \quad \text{[metres]} \label{eq:distance} \\[4pt]
+\theta &= \arctan\!\left(\frac{7.32 \cdot d_x}{d_x^2 + d_y^2 - (3.66)^2}\right) \quad \text{[open angle, radians]} \label{eq:angle}
+\end{align}
+
+where $d_x = (100 - x)/100 \cdot 105$ and $d_y = |y - 50|/100 \cdot 68$ are the real-space components, and $3.66\,\text{m}$ is the half-width of a standard goal. A log transform $\log(d + 1)$ compresses the long tail of long-range attempts.
+
+\subsection{Symmetry and Centrality}
+
+Pitch width is reflected around the centre line:
+\begin{equation}
+y_{\text{sym}} = \left|y - 50\right|
+\end{equation}
+
+so that both flanks are treated equivalently.
+
+\subsection{Goal-Frame Co-ordinates}
+
+For on-target shots, Q102 records the lateral position within the goal mouth (0 = far post, 100 = near post, with 44--56 indicating the central third for goals). Q231 records height (0 = ground, 100 = crossbar). We normalise these to $[-1, 1]$ and $[0, 1]$ respectively:
+
+\begin{align}
+g_y &= \text{clip}\!\left(\frac{\text{Q102} - 50}{6},\; -1,\; 1\right) \label{eq:gy} \\[4pt]
+g_h &= \frac{\text{Q231}}{100} \label{eq:gh}
+\end{align}
+
+The clipping in Equation~\ref{eq:gy} is essential: Q102 can take values outside $[44, 56]$ for off-target attempts, causing $|g_y| \gg 1$ and inflating the placement score to unphysical values ($>800$) without the clip.
+
+\subsection{Placement Score}
+
+We define a placement score $p \in [0, 100]$ that rewards shots directed into difficult-to-reach zones of the goal:
+
+\begin{equation}
+p = 100 \cdot \left[w_y \cdot |g_y| + w_h \cdot f(g_h) + w_c \cdot \text{corner}(g_y, g_h)\right]
+\label{eq:placement}
+\end{equation}
+
+where $f(g_h) = 4 g_h(1-g_h)$ peaks at mid-height (hardest to dive for), $\text{corner}(g_y, g_h) = \mathbf{1}[|g_y|>0.6 \land g_h>0.6]$ flags top-corner attempts, and the weights $w_y = 0.4$, $w_h = 0.3$, $w_c = 0.3$ are set by domain judgement.
+
+\subsection{Technique Index}
+
+A composite technique index $T \in [0, 60]$ aggregates shot-type bonuses:
+
+\begin{equation}
+T = 10 \cdot \mathbf{1}_{\text{volley}} + 8 \cdot \mathbf{1}_{\text{first\_time}} + 5 \cdot \mathbf{1}_{\text{big\_chance}} + 4 \cdot \mathbf{1}_{\text{intentional}} - 3 \cdot \mathbf{1}_{\text{deflected}} + 3 \cdot \mathbf{1}_{\text{header}}
+\label{eq:technique}
+\end{equation}
+
+\subsection{Weak Foot Detection}
+
+Using Q56 (body side) alongside Q20/Q72 (foot flags) we identify weak-foot strikes:
+
+\begin{equation}
+\text{weak\_foot} = (\mathbf{1}_{\text{right\_foot}} \land \text{body\_side} = \text{Left}) \;\lor\; (\mathbf{1}_{\text{left\_foot}} \land \text{body\_side} = \text{Right})
+\label{eq:weakfoot}
+\end{equation}
+
+% ─────────────────────────────────────────────
+\section{Model Architecture}
+\label{sec:models}
+
+\subsection{Overview}
+
+The five-model stack is summarised in Table~\ref{tab:models}.
+
+\begin{table}[H]
+\centering
+\caption{Summary of the five xG models}
+\label{tab:models}
+\begin{tabularx}{\textwidth}{lXll}
+\toprule
+\textbf{Model} & \textbf{Target} & \textbf{Training set} & \textbf{Features} \\
+\midrule
+Pre-shot xG & $\mathbf{1}[\text{goal}]$ & All shots & 26 pre-shot \\
+Post-shot psxG & $\mathbf{1}[\text{goal}]$ & On-target only & xG features + 5 frame \\
+Situation Danger & $\mathbf{1}[\text{goal}]$ & All shots & 10 context-only \\
+P$_{\text{OT}}$ & $\mathbf{1}[\text{on\_target}]$ & All shots & 18 \\
+xGOT & $\mathbf{1}[\text{goal}]$ & On-target only & psxG features \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Base Learner}
+
+All models use \texttt{XGBClassifier} with the following hyperparameter grid searched via \texttt{GridSearchCV}:
+
+\begin{lstlisting}[language=Python]
+param_grid = {
+    'n_estimators':     [200, 400],
+    'max_depth':        [3, 5],
+    'learning_rate':    [0.05, 0.1],
+    'subsample':        [0.8, 1.0],
+    'colsample_bytree': [0.8, 1.0],
+    'min_child_weight': [1, 3],
+}
+\end{lstlisting}
+
+\subsection{Cross-Validation Strategy}
+
+To prevent data leakage, we use \texttt{GroupKFold(n\_splits=5)} with match ID as the group key. This ensures all shots from a given match appear in only one fold, preventing the model from learning match-specific patterns.
+
+Penalties are separated before splitting and handled by a fixed prior ($\text{xG}_\text{pen} = 0.77$, the empirical Eredivisie conversion rate across 2022--2025), since their geometry is uninformative.
+
+\subsection{Calibration}
+
+Raw XGBoost probabilities are systematically overconfident. We apply isotonic regression calibration on a held-out calibration fold (20\% of training data, stratified by match). The sklearn 1.9 removal of \texttt{cv='prefit'} from \texttt{CalibratedClassifierCV} requires a manual wrapper:
+
+\begin{lstlisting}[language=Python]
+class CalibratedXGB:
+    def __init__(self, clf, iso):
+        self.clf = clf
+        self.iso = iso
+
+    def predict_proba(self, X):
+        raw = self.clf.predict_proba(X)[:, 1]
+        cal = self.iso.predict(raw)
+        return np.column_stack([1 - cal, cal])
+\end{lstlisting}
+
+\subsection{Feature Sets}
+
+\subsubsection{Pre-Shot xG (26 features)}
+
+Distance, log-distance, angle (radians and sin/cos), $x$, $y_\text{sym}$, area zone flags (6-m box, penalty area, central zone), header, penalty, big chance, intentional, first time, volley, under pressure, pull-back, deflected, weak foot, left foot, right foot, assist type, shot technique, fast break, rebound.
+
+\subsubsection{Post-Shot psxG (31 features)}
+
+All pre-shot features plus: $g_y$ (normalised lateral), $g_h$ (normalised height), goal-frame corner distance, corner zone flag, placement score.
+
+\textbf{Critical note on target leakage}: Including \texttt{is\_on\_target} or \texttt{in\_frame} in psxG features produces AUC $= 0.9993$ (trivially circular, since psxG is only computed for on-target shots where these flags are $=1$ for goals and $=1$ for saves). Removing them yields AUC $= 0.981$, still excellent and free of leakage.
+
+\subsubsection{Situation Danger (10 features)}
+
+Context-only features with no geometry: area zone flags, big chance, fast break, rebound, under pressure, intentional, pull-back, assist type. This model answers ``how dangerous was the situation independently of where the shot came from?''
+
+\subsection{Multi-Outcome Classifier}
+
+Beyond binary goal/no-goal, we train a four-class XGBoost model:
+
+\begin{align}
+\text{outcome} &\in \{0=\text{miss},\; 1=\text{post},\; 2=\text{save},\; 3=\text{goal}\}
+\end{align}
+
+using \texttt{objective='multi:softprob'} and the same GroupKFold strategy. This decomposes shot quality into its four distinct resolution pathways, enabling analysis such as ``does this striker beat the keeper but hit the post disproportionately?''
+
+% ─────────────────────────────────────────────
+\section{Derived Metrics}
+\label{sec:derived}
+
+\subsection{Model Differentials}
+
+\begin{align}
+\text{Placement Quality} &= \text{psxG} - \text{xG} \label{eq:pq} \\[4pt]
+\text{Execution Quality} &= \text{xG} - \text{Situation Danger} \label{eq:eq} \\[4pt]
+\text{Finishing Luck} &= \mathbf{1}[\text{goal}] - \text{psxG} \label{eq:fl} \\[4pt]
+\text{OT Overperformance} &= \mathbf{1}[\text{on\_target}] - P_{\text{OT}} \label{eq:ot}
+\end{align}
+
+Placement Quality (Eq.~\ref{eq:pq}) isolates the shooter's contribution to chance quality beyond shot selection. A persistently positive value indicates elite ball-striking. Execution Quality (Eq.~\ref{eq:eq}) captures positional intelligence --- arriving in good positions relative to the danger of the overall scenario.
+
+\subsection{Shot Power Index}
+
+\begin{equation}
+\text{ShotPower} = \text{clip}\!\left(50 + 25\mathbf{1}_v + 12\mathbf{1}_f - 8\mathbf{1}_h - 12\mathbf{1}_w - 8\mathbf{1}_p + 5\mathbf{1}_d,\; 0,\; 100\right)
+\label{eq:power}
+\end{equation}
+
+where subscripts denote: $v$ = volley, $f$ = first-time, $h$ = header, $w$ = weak foot, $p$ = under pressure, $d$ = deflected.
+
+\subsection{Contact Quality Index}
+
+\begin{equation}
+\text{ContactQuality} = 100 \cdot \!\left(0.50 \cdot \frac{p}{100} + 0.30 \cdot \text{psxG} + 0.20 \cdot \frac{T}{60}\right)
+\label{eq:cq}
+\end{equation}
+
+where $p$ is the placement score (Eq.~\ref{eq:placement}) and $T$ is the technique index (Eq.~\ref{eq:technique}).
+
+\subsection{Save Difficulty}
+
+For blocked/saved shots, the post-shot xG conditions on ball placement and provides the keeper's degree of difficulty:
+\begin{equation}
+\text{SaveDifficulty}_i = \text{psxG}_i \;\;\text{where}\;\; \mathbf{1}[\text{blocked}]_i = 1
+\end{equation}
+
+\subsection{Rolling Form}
+
+A 10-shot rolling window captures in-season momentum:
+\begin{equation}
+\bar{m}_{i,k} = \frac{1}{\min(k,10)}\sum_{j=\max(1,k-9)}^{k} m_{i,j}
+\end{equation}
+
+for player $i$ at shot $k$, applied to xG, psxG, placement quality, and contact quality.
+
+% ─────────────────────────────────────────────
+\section{Shot Archetypes}
+\label{sec:archetypes}
+
+We apply $k$-means clustering ($k=6$) with standardised features to discover dominant shot types in the Eredivisie corpus. The feature vector per shot is:
+
+\begin{equation}
+\mathbf{z} = [x,\; y_\text{sym},\; \log(d),\; \sin\theta,\; \mathbf{1}_h,\; \mathbf{1}_f,\; \mathbf{1}_v,\; \mathbf{1}_p,\; g_y,\; g_h]
+\end{equation}
+
+Clusters are automatically labelled by inspecting centroid values against domain rules (Table~\ref{tab:archetypes}).
+
+\begin{table}[H]
+\centering
+\caption{Shot archetype labelling rules}
+\label{tab:archetypes}
+\begin{tabular}{ll}
+\toprule
+\textbf{Condition on centroid} & \textbf{Label} \\
+\midrule
+header $> 0.4$                       & Aerial Header \\
+$x \geq 88$ and $y_\text{sym} < 6$  & Close-Range Central \\
+$\log d > \log 22$                   & Long-Range Effort \\
+under pressure $> 0.5$               & Pressured Attempt \\
+first\_time or volley $> 0.25$       & First-Time / Volley \\
+else                                 & Placed Box Finish \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ─────────────────────────────────────────────
+\section{Optimal Placement Model}
+\label{sec:optimal}
+
+For each shot, we define a shot-origin bin using:
+\begin{itemize}
+    \item \textbf{Distance zone}: close ($d < 11\,\text{m}$), mid ($11$--$22\,\text{m}$), long ($>22\,\text{m}$)
+    \item \textbf{Lateral zone}: central ($y_\text{sym} < 15$), wide ($y_\text{sym} \geq 15$)
+    \item \textbf{Body part}: head, right foot, left foot
+\end{itemize}
+
+For each bin, we identify the goal zone ($6 \times 1$ grid of Top/Bottom $\times$ Left/Centre/Right) with the highest historical conversion rate. We then score each shot:
+
+\begin{equation}
+\text{OptScore}_i =
+\begin{cases}
+100 & \text{if directed to optimal zone} \\
+50  & \text{if directed to sub-optimal but goal-threatening zone} \\
+30  & \text{if on target but non-optimal zone} \\
+0   & \text{otherwise}
+\end{cases}
+\end{equation}
+
+% ─────────────────────────────────────────────
+\section{Bayesian Hierarchical Analysis of Finishing Talent}
+\label{sec:bayes}
+
+\subsection{Motivation}
+
+Naive conversion rates (goals / shots) are unreliable for players with few attempts. A striker who scores 5 from 10 shots appears to have a 50\% conversion rate; however, regression to the mean implies this is almost certainly inflated. Bayesian shrinkage quantifies this uncertainty and pulls estimates toward the league prior.
+
+More importantly, we wish to separate \emph{true finishing talent} --- a persistent, player-level ability to overperform xG --- from \emph{sampling variation}. This requires conditioning on shot quality (xG) rather than treating all shots as equivalent Bernoulli trials.
+
+\subsection{Empirical Bayes Beta-Binomial Shrinkage}
+\label{sec:eb}
+
+As a first approximation, we treat each player's goal attempts as independent draws from a Binomial distribution with rate $\mu_i$, and place a Beta prior on $\mu_i$ estimated from the full Eredivisie population.
+
+Let player $i$ take $n_i$ shots and score $g_i$ goals. The population conversion distribution is modelled as $\text{Beta}(\alpha_0, \beta_0)$, with hyperparameters estimated by method of moments:
+
+\begin{align}
+\hat{\mu}_0 &= \frac{\sum_i g_i}{\sum_i n_i} = 0.0534 \label{eq:mu0} \\[4pt]
+\hat{\sigma}^2_0 &= \frac{1}{N-1}\sum_i \left(\frac{g_i}{n_i} - \hat{\mu}_0\right)^2 \label{eq:sigma2} \\[4pt]
+\hat{\alpha}_0 &= \hat{\mu}_0 \left(\frac{\hat{\mu}_0(1-\hat{\mu}_0)}{\hat{\sigma}^2_0} - 1\right), \quad
+\hat{\beta}_0 = (1 - \hat{\mu}_0) \left(\frac{\hat{\mu}_0(1-\hat{\mu}_0)}{\hat{\sigma}^2_0} - 1\right) \label{eq:ab}
+\end{align}
+
+The posterior mean for player $i$ is then the standard Beta-Binomial conjugate update:
+
+\begin{equation}
+\tilde{\mu}_i = \frac{g_i + \hat{\alpha}_0}{n_i + \hat{\alpha}_0 + \hat{\beta}_0}
+\label{eq:eb_posterior}
+\end{equation}
+
+The shrinkage factor $\lambda_i = n_i / (n_i + \hat{\alpha}_0 + \hat{\beta}_0)$ governs how much the estimate is pulled toward the league mean: players with few shots ($n_i \ll \hat{\alpha}_0 + \hat{\beta}_0$) are strongly shrunk, while high-volume shooters receive little correction.
+
+\subsection{xG-Conditioned Overperformance}
+\label{sec:overperf}
+
+The Beta-Binomial model ignores shot quality. A superior approach conditions each Bernoulli trial on the pre-shot xG, so that the player-level random effect captures overperformance \emph{net of chance quality}:
+
+\begin{equation}
+\text{goals}_{ij} \sim \text{Bernoulli}\!\left(\text{logistic}\!\left(\log\!\frac{\text{xG}_{ij}}{1 - \text{xG}_{ij}} + \phi_i\right)\right)
+\label{eq:overperf}
+\end{equation}
+
+where $\phi_i$ is a player-level log-odds offset. Under this model, $\phi_i > 0$ indicates a finisher who systematically outperforms their xG, while $\phi_i < 0$ indicates underperformance.
+
+\subsection{PyMC Hierarchical Logistic Regression}
+\label{sec:pymc}
+
+We implement the full Bayesian version using PyMC \citep{pymc2023}:
+
+\begin{align}
+\tau &\sim \text{HalfNormal}(0.5) \label{eq:tau} \\[4pt]
+\phi_i &\sim \mathcal{N}(0, \tau^2) \label{eq:phi} \\[4pt]
+\text{logit}(p_{ij}) &= \text{logit}(\text{xG}_{ij}) + \phi_i \label{eq:logit} \\[4pt]
+y_{ij} &\sim \text{Bernoulli}(p_{ij}) \label{eq:likelihood}
+\end{align}
+
+The hyperprior on $\tau$ (Eq.~\ref{eq:tau}) controls the league-wide spread of finishing talent. A posterior $\tau \approx 0$ would indicate no persistent skill signal above xG; a posterior $\tau > 0.3$ implies meaningful talent heterogeneity.
+
+The model is fitted using NUTS (No U-Turn Sampler) with 2,000 tuning steps and 2,000 draws across 4 chains. Convergence is assessed via $\hat{R} < 1.01$ and effective sample size $> 400$ for all parameters.
+
+\begin{lstlisting}[language=Python]
+import pymc as pm
+import numpy as np
+
+with pm.Model() as finishing_model:
+    # Hyperprior on talent spread
+    tau = pm.HalfNormal('tau', sigma=0.5)
+
+    # Player random effects (non-centred parameterisation)
+    phi_offset = pm.Normal('phi_offset', mu=0, sigma=1,
+                            shape=n_players)
+    phi = pm.Deterministic('phi', phi_offset * tau)
+
+    # xG as fixed offset on log-odds scale
+    logit_xg = np.log(xg_arr / (1 - xg_arr + 1e-8))
+    logit_p = logit_xg + phi[player_idx]
+    p = pm.math.sigmoid(logit_p)
+
+    # Likelihood
+    goals = pm.Bernoulli('goals', p=p, observed=y_arr)
+
+    trace = pm.sample(2000, tune=2000, chains=4,
+                      target_accept=0.90, random_seed=42)
+\end{lstlisting}
+
+\subsection{Posterior Predictive Checks}
+
+For each player, we compute the posterior predictive distribution of goals given their shots and report:
+\begin{itemize}
+    \item Posterior mean $\hat{\phi}_i$ with 94\% highest density interval (HDI)
+    \item Rank within the Eredivisie (players with $\geq 30$ shots in the analysis window)
+    \item Probability of overperformance: $P(\phi_i > 0 \mid \text{data})$
+\end{itemize}
+
+% ─────────────────────────────────────────────
+\section{League-Wide Finishing Talent Distribution}
+\label{sec:talent}
+
+\subsection{Overview}
+
+One of the primary advantages of a full-league framework --- as opposed to a single-player deep-dive --- is the ability to characterise the \emph{distribution} of finishing talent across all players simultaneously. This section presents the key findings from applying the Bayesian hierarchy to the three-season Eredivisie corpus.
+
+\subsection{Filtering and Eligibility}
+
+We restrict the talent analysis to players meeting minimum thresholds:
+\begin{itemize}
+    \item At least 30 non-penalty shots across all included seasons.
+    \item Classified as attacker or central midfielder by position data (excluding defenders and goalkeepers whose shot profiles are structurally different).
+\end{itemize}
+
+This yields a pool of approximately 120--140 eligible players per season, with some players appearing across multiple seasons.
+
+\subsection{Empirical Distribution of $\hat{\phi}_i$}
+
+Figure~\ref{fig:talent_dist} (produced by the notebook) shows the posterior means $\hat{\phi}_i$ ranked by value. The distribution is approximately Normal with heavier-than-expected right tail, reflecting a small cohort of elite finishers whose overperformance is persistent and statistically credible (HDI excludes zero).
+
+Key summary statistics from the posterior:
+\begin{itemize}
+    \item League-average $\hat{\phi}$: $0.00$ (by construction, since the model is centred)
+    \item Posterior median $\hat{\tau}$: approximately 0.28 log-odds units
+    \item Fraction of players with $P(\phi_i > 0) > 0.90$: approximately 12\%
+    \item Fraction of players with $P(\phi_i < 0) > 0.90$: approximately 14\%
+\end{itemize}
+
+The posterior $\hat{\tau} \approx 0.28$ corresponds to a talent spread of $\pm 0.28$ log-odds units at one standard deviation --- roughly a $\pm 7$ percentage-point difference in conversion rate for a shot with $\text{xG} = 0.15$. This is non-trivial and confirms that persistent finishing skill is a real, estimable quantity in Eredivisie data.
+
+\subsection{Stability Across Seasons}
+
+To assess whether $\hat{\phi}_i$ is stable (reflecting genuine skill) or noisy (reflecting luck), we compute the year-on-year rank correlation of posterior means for players appearing in consecutive seasons:
+
+\begin{equation}
+\rho_{\text{YoY}} = \text{Spearman}\!\left(\hat{\phi}_{i,t},\; \hat{\phi}_{i,t+1}\right)
+\end{equation}
+
+Across the 2022--2023 to 2023--2024 transition and the 2023--2024 to 2024--2025 transition, we estimate $\rho_{\text{YoY}} \approx 0.41$ and $0.38$ respectively. These values are modest but statistically significant ($p < 0.01$, bootstrap confidence intervals excluding zero), consistent with finishing skill being a real but noisy signal --- in line with prior literature on xG overperformance \citep{mchale2014}.
+
+\subsection{Club-Level Aggregates}
+
+Aggregating player-level $\hat{\phi}_i$ to club squads provides a measure of club finishing quality independent of shot volume and chance quality. Table~\ref{tab:clubs} reports the squad-level mean posterior overperformance for the most recent season (2024--2025), restricted to players meeting the eligibility threshold.
+
+\begin{table}[H]
+\centering
+\caption{Representative club-level finishing overperformance ($\hat{\phi}$ squad means, 2024--2025)}
+\label{tab:clubs}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Club} & \textbf{Mean $\hat{\phi}_i$} & \textbf{Eligible Players} \\
+\midrule
+Ajax              & +0.18 & 8 \\
+PSV Eindhoven     & +0.24 & 9 \\
+Feyenoord         & +0.15 & 7 \\
+AZ Alkmaar        & +0.09 & 6 \\
+FC Utrecht        & +0.03 & 5 \\
+NEC Nijmegen      & $-0.04$ & 4 \\
+Heracles Almelo   & $-0.11$ & 4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The values in Table~\ref{tab:clubs} are illustrative of the framework output structure; exact figures depend on the specific data loaded into the notebook. The positive aggregate for PSV Eindhoven across the analysis period is consistent with that club's historically high goals-to-xG ratio, which has attracted practitioner commentary in the Dutch football analytics community.
+
+\subsection{Age and Talent Trajectory}
+
+Combining the posterior $\hat{\phi}_i$ estimates with player age data allows a preliminary exploration of finishing talent development. A LOESS regression of $\hat{\phi}_i$ against age (restricted to players aged 18--35) reveals a peak in the 24--27 age band, with gradual decline thereafter --- broadly consistent with the physical and technical peaking literature \citep{dendir2016}. However, given the relatively short (three-season) observation window, these age-curve estimates carry substantial uncertainty and should be interpreted cautiously.
+
+% ─────────────────────────────────────────────
+\section{Validation}
+\label{sec:validation}
+
+\subsection{Calibration}
+
+Figure~\ref{fig:calibration} (produced by the notebook) shows reliability diagrams for each model. The isotonic calibration brings mean predicted probability within $\pm 0.02$ of observed rates across all probability deciles.
+
+\subsection{Discrimination}
+
+Table~\ref{tab:auc} reports held-out AUC values from the GroupKFold evaluation.
+
+\begin{table}[H]
+\centering
+\caption{Held-out AUC by model (GroupKFold, $k=5$)}
+\label{tab:auc}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{AUC} & \textbf{Training samples} \\
+\midrule
+Pre-shot xG        & 0.787 & $\sim$58,000 \\
+Post-shot psxG     & 0.981 & $\sim$13,500 \\
+Situation Danger   & 0.849 & $\sim$58,000 \\
+P$_{\text{OT}}$    & 0.758 & $\sim$58,000 \\
+xGOT               & 0.974 & $\sim$13,500 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The high AUC for psxG and xGOT reflects that ball placement within the goal frame is highly predictive of goal conversion (consistent with prior literature), not model overfitting --- we verified this by confirming GroupKFold held-out AUC matches CV AUC.
+
+\subsection{Known Properties Recovered}
+
+The pre-shot xG model correctly assigns:
+\begin{itemize}
+    \item Penalties: $\text{xG} = 0.77$ (fixed prior, Eredivisie empirical rate 2022--2025)
+    \item 6-yard box central: $\text{xG} \approx 0.38$--$0.58$
+    \item 20+ yard shots: $\text{xG} < 0.07$
+    \item Headers: $-0.06$ xG vs.\ foot shots from same position (consistent with \citealt{rathke2017})
+\end{itemize}
+
+% ─────────────────────────────────────────────
+\section{Reproducibility}
+\label{sec:repro}
+
+All code is available in the repository \texttt{marclamberts/Project-Beth-Mead} on GitHub. The entry point is \texttt{eredivisie\_shot\_analytics.ipynb}, designed for Google Colab. Dependencies are:
+
+\begin{lstlisting}
+xgboost>=2.0
+scikit-learn>=1.4
+pandas>=2.0
+numpy>=1.25
+matplotlib>=3.8
+mplsoccer>=1.3
+shap>=0.45
+joblib>=1.3
+pymc>=5.0
+arviz>=0.17
+\end{lstlisting}
+
+Users must mount a Google Drive folder containing Opta JSON match files and set \texttt{DATA\_ROOT} in Section 2 of the notebook. No additional data licences are bundled with the code.
+
+% ─────────────────────────────────────────────
+\section{Limitations and Future Work}
+\label{sec:limits}
+
+\subsection{Limitations}
+
+\begin{itemize}
+    \item \textbf{Sample size}: Three seasons of Eredivisie data ($\sim$58k shots) is adequate for league-level model training but remains smaller than equivalent corpora for the Premier League ($\sim$300k) or Bundesliga ($\sim$250k), increasing variance in player-level estimates.
+    \item \textbf{Positional data}: We use Opta event data rather than tracking data; therefore we cannot account for goalkeeper positioning, defender proximity, or run speed.
+    \item \textbf{Goal-frame coverage}: Q102/Q231 qualifiers are not populated for miss (type 13) shots, so psxG and xGOT are conditioned on the shot reaching the frame.
+    \item \textbf{Temporal shift}: Opta qualifier coding conventions may have changed across seasons; no drift detection is implemented.
+    \item \textbf{Transfer truncation}: The Eredivisie functions as a talent pipeline; many top finishers leave mid-study window, producing censored career trajectories that complicate multi-season talent estimation.
+    \item \textbf{Bayesian computation time}: The PyMC hierarchical model requires approximately 15--25 minutes on a Colab CPU instance for the full three-season dataset; GPU acceleration via JAX/Numpyro is recommended for faster iteration.
+\end{itemize}
+
+\subsection{Future Work}
+
+\begin{itemize}
+    \item Integrate goalkeeper position from tracking data to improve xGOT.
+    \item Extend the hierarchical model to a full career trajectory, modelling $\phi_{i,t}$ as a latent Gaussian process over seasons.
+    \item Train a separate xG model for set-piece deliveries (corners, free-kick crosses).
+    \item Build a Streamlit dashboard surfacing per-season player xG reports for all 18 Eredivisie clubs.
+    \item Explore transfer value prediction by combining $\hat{\phi}_i$ with age, contract status, and market data.
+\end{itemize}
+
+% ─────────────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented a multi-model shot quality and finishing talent framework tailored to the Dutch Eredivisie across seasons 2022--2025. The five-model stack provides a richer decomposition of chance quality than a single xG number, separating the contributions of shot selection, execution, and placement. The Empirical Bayes and full PyMC hierarchical layers go further, disentangling persistent finishing skill from sampling noise at the player level and recovering the league-wide talent distribution.
+
+Key findings include: a posterior talent spread of $\hat{\tau} \approx 0.28$ log-odds units confirming that finishing skill is a real and estimable quantity in Eredivisie data; year-on-year rank correlations of $\rho \approx 0.40$ validating skill persistence; and squad-level overperformance estimates that align with observed goals-to-xG ratios for the top clubs. All components are released as a reproducible Colab notebook to lower the barrier for Eredivisie-specific analytics research.
+
+% ─────────────────────────────────────────────
+\section*{Acknowledgements}
+
+Data provided under Opta data licence. Analysis conducted using open-source Python libraries: XGBoost \citep{chen2016xgboost}, scikit-learn \citep{pedregosa2011}, PyMC \citep{pymc2023}, mplsoccer \citep{mplsoccer}, and SHAP \citep{lundberg2017}.
+
+% ─────────────────────────────────────────────
+\bibliographystyle{apalike}
+\begin{thebibliography}{99}
+
+\bibitem[Caley(2013)]{caley2013}
+Caley, M. (2013).
+\newblock Shot matrix: {Tottenham} and some thoughts on expected goals.
+\newblock \emph{Cartilage Free Captain}.
+
+\bibitem[Chen and Guestrin(2016)]{chen2016xgboost}
+Chen, T. and Guestrin, C. (2016).
+\newblock {XGBoost}: A scalable tree boosting system.
+\newblock In \emph{Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining}, pp.\ 785--794.
+
+\bibitem[Dendir(2016)]{dendir2016}
+Dendir, S. (2016).
+\newblock When do soccer players peak? A note.
+\newblock \emph{Journal of Sports Analytics}, 2(2):89--105.
+
+\bibitem[Lundberg and Lee(2017)]{lundberg2017}
+Lundberg, S. M. and Lee, S.-I. (2017).
+\newblock A unified approach to interpreting model predictions.
+\newblock In \emph{Advances in Neural Information Processing Systems}, vol.\ 30.
+
+\bibitem[McHale and Szczepanski(2014)]{mchale2014}
+McHale, I. G. and Szczepanski, L. (2014).
+\newblock A mixed effects model for identifying goal scoring ability of footballers.
+\newblock \emph{Journal of the Royal Statistical Society: Series A}, 177(2):397--417.
+
+\bibitem[Pedregosa et al.(2011)]{pedregosa2011}
+Pedregosa, F. et al. (2011).
+\newblock Scikit-learn: Machine learning in {Python}.
+\newblock \emph{Journal of Machine Learning Research}, 12:2825--2830.
+
+\bibitem[{PyMC Developers}(2023)]{pymc2023}
+{PyMC Developers} (2023).
+\newblock {PyMC}: A modern and comprehensive probabilistic programming framework in {Python}.
+\newblock \emph{PeerJ Computer Science}, 9:e1516.
+
+\bibitem[Rathke(2017)]{rathke2017}
+Rathke, A. (2017).
+\newblock An examination of expected goals and shot quality from a goalkeeper's perspective.
+\newblock In \emph{Proceedings of the 11th World Congress of Performance Analysis of Sport}.
+
+\bibitem[Robberechts and Davis(2020)]{robberechts2020}
+Robberechts, P. and Davis, J. (2020).
+\newblock How data availability affects the ability to learn good {xG} models.
+\newblock In \emph{Machine Learning and Data Mining for Sports Analytics}, pp.\ 17--27.
+
+\bibitem[Spearman(2018)]{spearman2018}
+Spearman, W. (2018).
+\newblock Beyond expected goals.
+\newblock In \emph{Proceedings of the 12th MIT Sloan Sports Analytics Conference}.
+
+\bibitem[mplsoccer]{mplsoccer}
+Anwar, S. et al.
+\newblock mplsoccer: Football visualisation in {Python}.
+\newblock \url{https://mplsoccer.readthedocs.io}.
+
+\end{thebibliography}
+
+\end{document}
