@@ -876,6 +876,210 @@ for ri, (_, row) in enumerate(pct_sorted.iterrows(), 3):
 ws9.freeze_panes = "A3"
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Sheet 10: 💡 Key Insights
+# ═════════════════════════════════════════════════════════════════════════════
+ws10 = wb.create_sheet("💡 Key Insights")
+ws10.sheet_view.showGridLines = False
+
+# Column widths
+ws10.column_dimensions["A"].width = 3
+ws10.column_dimensions["B"].width = 28
+ws10.column_dimensions["C"].width = 14
+ws10.column_dimensions["D"].width = 14
+ws10.column_dimensions["E"].width = 14
+ws10.column_dimensions["F"].width = 14
+ws10.column_dimensions["G"].width = 14
+ws10.column_dimensions["H"].width = 14
+ws10.column_dimensions["I"].width = 42
+
+# ── Title ─────────────────────────────────────────────────────────────────────
+ws10.merge_cells("B1:I1")
+c = ws10.cell(row=1, column=2,
+              value="💡  KEY SCOUTING INSIGHTS  —  Eredivisie Bayesian Finishing  (2022–23 to 2024–25)")
+c.font = Font(bold=True, size=15, color=WHITE, name="Calibri")
+c.fill = px(NAVY); c.alignment = center(); ws10.row_dimensions[1].height = 36
+
+ws10.merge_cells("B2:I2")
+c = ws10.cell(row=2, column=2,
+              value=f"League prior mean: {league_mean*100:.2f}%  |  635 players analysed  |  "
+                    f"531 with ≥10 shots  |  "
+                    f"Elite tier: {(df_q10['tier']=='Elite').sum()} players  |  "
+                    f"Strong tier: {(df_q10['tier']=='Strong').sum()} players")
+c.font = Font(size=9, color=WHITE, italic=True, name="Calibri")
+c.fill = px(TEAL); c.alignment = center(); ws10.row_dimensions[2].height = 18
+
+def insight_section(ws, row, title, bg=NAVY):
+    ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=9)
+    c = ws.cell(row=row, column=2, value=f"  {title}")
+    c.font = Font(bold=True, size=11, color=WHITE, name="Calibri")
+    c.fill = px(bg); c.alignment = left()
+    ws.row_dimensions[row].height = 24
+    return row + 1
+
+def insight_header(ws, row, cols, labels, bg=TEAL):
+    for ci, (col, lbl) in enumerate(zip(cols, labels)):
+        c = ws.cell(row=row, column=col, value=lbl)
+        c.font = Font(bold=True, size=9, color=WHITE, name="Calibri")
+        c.fill = px(bg); c.alignment = center(); c.border = border_thin()
+    ws.row_dimensions[row].height = 18
+    return row + 1
+
+def insight_row(ws, row, vals, cols, bgs=None, bold_col=None):
+    bg_cycle = bgs or ([LIGHT_BG, WHITE] * 20)
+    row_bg = bg_cycle[row % 2]
+    for ci, (col, val) in enumerate(zip(cols, vals)):
+        c = ws.cell(row=row, column=col, value=val)
+        c.border = border_thin()
+        c.font = Font(bold=(col == bold_col), size=9, name="Calibri",
+                      color=DARK_TEXT)
+        c.fill = px(row_bg)
+        c.alignment = center() if col != 9 else left()
+    ws.row_dimensions[row].height = 16
+    return row + 1
+
+# ── INSIGHT 1: Elite Finishers ────────────────────────────────────────────────
+cur_row = 4
+cur_row = insight_section(ws10, cur_row,
+    "🏆  INSIGHT 1 — Elite Finishers  (EB Mean ≥ 15.5%, Reliability ≥ 55%)", bg=NAVY)
+cur_row = insight_header(ws10, cur_row,
+    [2,3,4,5,6,7,8,9],
+    ["Player","Shots","Goals","Raw Conv%","EB Mean","EB vs xG","Reliability","Scout Note"])
+elite_players = df_q10[df_q10["tier"]=="Elite"].sort_values("eb_mean", ascending=False)
+for _, row in elite_players.iterrows():
+    note = ("Pure goalscorer — elite conversion + high reliability. Primary transfer target." if row["reliability"] > 0.6
+            else "Elite rate but lower sample — validate further.")
+    vals = [row["player_name"], int(row["n"]), int(row["goals"]),
+            pct(row["raw_rate"]), pct(row["eb_mean"]),
+            f"{row['eb_vs_xg']*100:+.2f}%", pct(row["reliability"]), note]
+    cur_row = insight_row(ws10, cur_row, vals, [2,3,4,5,6,7,8,9], bold_col=2)
+
+# ── INSIGHT 2: Consistent Overperformers ─────────────────────────────────────
+cur_row += 1
+cur_row = insight_section(ws10, cur_row,
+    "📈  INSIGHT 2 — Consistent Overperformers  (eb_vs_xg > +2.5%, min 30 shots, high reliability)",
+    bg="1B5E7B")
+cur_row = insight_header(ws10, cur_row,
+    [2,3,4,5,6,7,8,9],
+    ["Player","Shots","Goals","xG Sum","xG/Shot","EB Mean","Edge vs xG","Scout Note"])
+overperf = df_q30[(df_q30["eb_vs_xg"] > 0.025) & (df_q30["reliability"] > 0.25)].sort_values("eb_vs_xg", ascending=False).head(12)
+for _, row in overperf.iterrows():
+    edge_pp = row["eb_vs_xg"] * 100
+    note = (f"Converts {edge_pp:.1f}pp above xG expectation — exceptional finishing quality, not luck."
+            if row["reliability"] > 0.45
+            else f"+{edge_pp:.1f}pp above xG — promising signal, reliability growing.")
+    vals = [row["player_name"], int(row["n"]), int(row["goals"]),
+            f"{row['xg_sum']:.1f}", pct(row["xg_per_shot"]),
+            pct(row["eb_mean"]), f"+{row['eb_vs_xg']*100:.2f}%", note]
+    cur_row = insight_row(ws10, cur_row, vals, [2,3,4,5,6,7,8,9], bold_col=2)
+
+# ── INSIGHT 3: Shot Selection Leaders ────────────────────────────────────────
+cur_row += 1
+cur_row = insight_section(ws10, cur_row,
+    "🎯  INSIGHT 3 — Shot Selection Leaders  (xG/shot > 16%, min 30 shots)",
+    bg="2D6A4F")
+cur_row = insight_header(ws10, cur_row,
+    [2,3,4,5,6,7,8,9],
+    ["Player","Shots","Goals","xG/Shot","EB Mean","EB vs xG","Reliability","Scout Note"])
+selectors = df_q30[df_q30["xg_per_shot"] > 0.16].sort_values("xg_per_shot", ascending=False).head(12)
+for _, row in selectors.iterrows():
+    if row["eb_vs_xg"] > 0.01:
+        note = f"Gets into high-quality positions AND converts — double threat."
+    elif row["eb_vs_xg"] < -0.04:
+        note = f"High xG positions but {abs(row['eb_vs_xg'])*100:.1f}pp below expectation — technique concern."
+    else:
+        note = f"High xG/shot — excellent movement to get into dangerous areas."
+    vals = [row["player_name"], int(row["n"]), int(row["goals"]),
+            pct(row["xg_per_shot"]), pct(row["eb_mean"]),
+            f"{row['eb_vs_xg']*100:+.2f}%", pct(row["reliability"]), note]
+    cur_row = insight_row(ws10, cur_row, vals, [2,3,4,5,6,7,8,9], bold_col=2)
+
+# ── INSIGHT 4: Goals Above xG Leaders ────────────────────────────────────────
+cur_row += 1
+cur_row = insight_section(ws10, cur_row,
+    "⚡  INSIGHT 4 — Goals Above Expected  (raw goals − xG sum, min 30 shots)",
+    bg="7B3F00")
+cur_row = insight_header(ws10, cur_row,
+    [2,3,4,5,6,7,8,9],
+    ["Player","Shots","Goals","xG Sum","Goals−xG","EB Mean","EB vs xG","Scout Note"])
+g_above = df_q30.nlargest(12, "goals_above_xg")
+for _, row in g_above.iterrows():
+    g_diff = row["goals_above_xg"]
+    note = (f"+{g_diff:.1f} goals above xG over career — consistent overdelivery backed by EB model."
+            if row["eb_vs_xg"] > 0.01
+            else f"+{g_diff:.1f} goals above xG but EB suggests mean reversion likely.")
+    vals = [row["player_name"], int(row["n"]), int(row["goals"]),
+            f"{row['xg_sum']:.1f}", f"+{g_diff:.1f}",
+            pct(row["eb_mean"]), f"{row['eb_vs_xg']*100:+.2f}%", note]
+    cur_row = insight_row(ws10, cur_row, vals, [2,3,4,5,6,7,8,9], bold_col=2)
+
+# ── INSIGHT 5: Buy-Low Candidates (underperforming xG) ───────────────────────
+cur_row += 1
+cur_row = insight_section(ws10, cur_row,
+    "📉  INSIGHT 5 — Buy-Low Candidates  (high xG/shot but eb_vs_xg < −3%, min 30 shots)",
+    bg="8B0000")
+cur_row = insight_header(ws10, cur_row,
+    [2,3,4,5,6,7,8,9],
+    ["Player","Shots","Goals","xG/Shot","EB Mean","EB vs xG","Shrinkage","Scout Note"])
+buy_low = df_q30[(df_q30["xg_per_shot"] > 0.14) & (df_q30["eb_vs_xg"] < -0.03)].sort_values("eb_vs_xg").head(10)
+for _, row in buy_low.iterrows():
+    note = (f"Gets high-xG chances but finishing {abs(row['eb_vs_xg'])*100:.1f}pp below xG — "
+            f"could improve with coaching or regress positively toward xG.")
+    vals = [row["player_name"], int(row["n"]), int(row["goals"]),
+            pct(row["xg_per_shot"]), pct(row["eb_mean"]),
+            f"{row['eb_vs_xg']*100:+.2f}%", pct(row["shrinkage"]), note]
+    cur_row = insight_row(ws10, cur_row, vals, [2,3,4,5,6,7,8,9], bold_col=2)
+    # colour the edge cell red
+    c = ws10.cell(row=cur_row-1, column=7)
+    c.fill = px("FFC7CE"); c.font = Font(bold=True, size=9, color="9C0006", name="Calibri")
+
+# ── INSIGHT 6: Hidden Gems (5-29 shots) ──────────────────────────────────────
+cur_row += 1
+cur_row = insight_section(ws10, cur_row,
+    "🔍  INSIGHT 6 — Hidden Gems  (5–29 shots, EB mean ≥ 12.5%)  —  Scout Before Market Catches On",
+    bg="4A0080")
+cur_row = insight_header(ws10, cur_row,
+    [2,3,4,5,6,7,8,9],
+    ["Player","Shots","Goals","Raw Rate","EB Mean","EB vs xG","Shrinkage","Scout Note"])
+hidden_top = df[(df["n"]>=5)&(df["n"]<30)&(df["eb_mean"]>=0.125)].sort_values("eb_mean", ascending=False).head(15)
+for _, row in hidden_top.iterrows():
+    shrink_pct = row["shrinkage"] * 100
+    note = (f"High raw rate ({row['raw_rate']*100:.0f}%) in {int(row['n'])} shots — "
+            f"{shrink_pct:.0f}% shrinkage; needs 30+ shots to confirm but early signal is strong.")
+    vals = [row["player_name"], int(row["n"]), int(row["goals"]),
+            pct(row["raw_rate"]), pct(row["eb_mean"]),
+            f"{row['eb_vs_xg']*100:+.2f}%", pct(row["shrinkage"]), note]
+    cur_row = insight_row(ws10, cur_row, vals, [2,3,4,5,6,7,8,9], bold_col=2)
+
+# ── INSIGHT 7: Volume Leaders with Elite Rates ────────────────────────────────
+cur_row += 1
+cur_row = insight_section(ws10, cur_row,
+    "📊  INSIGHT 7 — Volume + Quality  (top 8 by shots with EB mean > league mean +3pp)",
+    bg="0D4F6B")
+cur_row = insight_header(ws10, cur_row,
+    [2,3,4,5,6,7,8,9],
+    ["Player","Shots","Goals","xG Sum","Goals−xG","EB Mean","Reliability","Scout Note"])
+vol_qual = df[df["eb_mean"] > league_mean + 0.03].nlargest(8, "n")
+for _, row in vol_qual.iterrows():
+    note = (f"High volume + above-average EB rate — consistent, proven performer. "
+            f"Reliability {row['reliability']*100:.0f}%.")
+    vals = [row["player_name"], int(row["n"]), int(row["goals"]),
+            f"{row['xg_sum']:.1f}", f"{row['goals_above_xg']:+.1f}",
+            pct(row["eb_mean"]), pct(row["reliability"]), note]
+    cur_row = insight_row(ws10, cur_row, vals, [2,3,4,5,6,7,8,9], bold_col=2)
+
+# ── Summary box ───────────────────────────────────────────────────────────────
+cur_row += 1
+ws10.merge_cells(start_row=cur_row, start_column=2, end_row=cur_row, end_column=9)
+c = ws10.cell(row=cur_row, column=2,
+              value="ℹ  HOW TO READ  |  EB Mean: Bayesian conversion rate (primary metric).  "
+                    "EB vs xG: finishing skill above/below shot quality.  "
+                    "Reliability: 1−shrinkage; >60% = trust the number.  "
+                    "Hidden Gems have high shrinkage — treat as leads, not confirmed signals.")
+c.font = Font(size=8, color="444444", italic=True, name="Calibri")
+c.fill = px(LIGHT_BG); c.alignment = left(wrap=True)
+ws10.row_dimensions[cur_row].height = 30
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Output
 # ═════════════════════════════════════════════════════════════════════════════
 OUT = "eredivisie_scouting.xlsx"
