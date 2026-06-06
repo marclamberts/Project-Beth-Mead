@@ -118,11 +118,13 @@ def add_legend(ax, items, loc="lower left"):
 @st.cache_data(show_spinner="Loading data…")
 def load_data():
     base  = os.path.dirname(__file__)
-    files = sorted(glob.glob(os.path.join(base,"**/*.json"), recursive=True))
+    # ── pre-filter to Arsenal files only by filename (saves ~2 GB of parsing) ──
+    all_files = sorted(glob.glob(os.path.join(base,"**/*.json"), recursive=True))
+    files = [f for f in all_files if "Arsenal" in os.path.basename(f)]
 
     passes = []; shots = []; touches = []; def_acts = []
     dribbles = []; net_edges = []; net_pos = []; sonar_passes = []
-    match_rows = []   # per-game aggregated stats for Mead
+    match_rows = []
 
     for fpath in files:
         fname  = os.path.basename(fpath)
@@ -133,95 +135,92 @@ def load_data():
         if "event" not in data:
             continue
         events = data["event"]
-        if not any(e.get("playerName") == "B. Mead" for e in events):
-            continue
 
-        arsenal_id = next(e["contestantId"] for e in events if e.get("playerName")=="B. Mead")
-
-        # parse date + opponent from filename: "YYYY-MM-DD_Home - Away.json"
-        date_str = fname.split("_")[0] if "_" in fname else "unknown"
+        # parse metadata from filename: "YYYY-MM-DD_Home - Away.json"
+        date_str  = fname.split("_")[0] if "_" in fname else "unknown"
         teams_str = fname.replace(".json","").split("_",1)[1] if "_" in fname else fname
-        parts = teams_str.split(" - ")
-        home_t = parts[0].strip() if len(parts)>=2 else ""
-        away_t = parts[1].strip() if len(parts)>=2 else ""
-        opponent = away_t if "Arsenal" in home_t else home_t
+        parts     = teams_str.split(" - ")
+        home_t    = parts[0].strip() if len(parts)>=2 else ""
+        away_t    = parts[1].strip() if len(parts)>=2 else ""
+        opponent  = away_t if "Arsenal" in home_t else home_t
 
-        # ── sonar: all Arsenal passes ──────────────────────────────────────
-        for e in events:
-            if e.get("contestantId") != arsenal_id or e.get("typeId") != 1:
+        # ── single pass through all events ────────────────────────────────
+        arsenal_id   = None
+        match_agg    = {"passes":0,"succ_passes":0,"shots":0,"goals":0,
+                        "key_passes":0,"prog_passes":0,"tackles":0,
+                        "interceptions":0,"dribbles":0,"succ_dribbles":0}
+
+        for i, e in enumerate(events):
+            pid  = e.get("playerName")
+            cid  = e.get("contestantId")
+            tid  = e.get("typeId")
+            x,y  = e.get("x"), e.get("y")
+            outcome = e.get("outcome", 0)
+
+            # discover Arsenal contestant ID on first Mead event
+            if arsenal_id is None and pid == "B. Mead":
+                arsenal_id = cid
+
+            # ── Arsenal team-level (sonar + pass network) ─────────────────
+            if arsenal_id and cid == arsenal_id:
+                if tid == 1 and x is not None:
+                    ex_s, ey_s = get_q(e,140), get_q(e,141)
+                    if ex_s and ey_s:
+                        dx, dy = float(ex_s)-x, float(ey_s)-y
+                        # sonar — store as compact tuple (player, angle, dist, outcome, season)
+                        sonar_passes.append((pid or "", math.degrees(math.atan2(dy,dx)),
+                                             math.hypot(dx,dy), outcome, season))
+                        # pass network
+                        if outcome == 1 and pid:
+                            net_pos.append((pid, x, y, season))
+                            for j in range(i+1, min(i+6, len(events))):
+                                ne = events[j]
+                                if ne.get("contestantId")==arsenal_id and ne.get("playerName"):
+                                    rec = ne["playerName"]
+                                    if rec != pid:
+                                        net_edges.append((pid, rec, season))
+                                    break
+
+            # ── Mead-only events ──────────────────────────────────────────
+            if pid != "B. Mead" or x is None or y is None:
                 continue
-            px, py = e.get("x"), e.get("y")
-            ex_s, ey_s = get_q(e,140), get_q(e,141)
-            if None in (px,py,ex_s,ey_s): continue
-            dx,dy = float(ex_s)-px, float(ey_s)-py
-            sonar_passes.append({"player":e.get("playerName",""), "angle":math.degrees(math.atan2(dy,dx)),
-                                  "dist":math.hypot(dx,dy), "outcome":e.get("outcome",0), "season":season})
 
-        # ── pass network ──────────────────────────────────────────────────
-        for i,e in enumerate(events):
-            if e.get("contestantId")!=arsenal_id or e.get("typeId")!=1 or e.get("outcome")!=1: continue
-            passer = e.get("playerName"); px,py = e.get("x"), e.get("y")
-            if not passer or px is None: continue
-            for j in range(i+1, min(i+6, len(events))):
-                ne = events[j]
-                if ne.get("contestantId")==arsenal_id and ne.get("playerName"):
-                    rec = ne["playerName"]
-                    if rec != passer:
-                        net_edges.append({"passer":passer,"recipient":rec,"season":season})
-                    break
-            net_pos.append({"player":passer,"x":px,"y":py,"season":season})
-
-        # ── per-match aggregates for Mead ─────────────────────────────────
-        mead_ev = [e for e in events if e.get("playerName")=="B. Mead"]
-        match_rows.append({
-            "match_id": fname.replace(".json",""),
-            "date": date_str,
-            "opponent": opponent,
-            "season": season,
-            "passes":       sum(1 for e in mead_ev if e["typeId"]==1),
-            "succ_passes":  sum(1 for e in mead_ev if e["typeId"]==1 and e.get("outcome")==1),
-            "shots":        sum(1 for e in mead_ev if e["typeId"] in (13,14,15,16)),
-            "goals":        sum(1 for e in mead_ev if e["typeId"]==16),
-            "key_passes":   sum(1 for e in mead_ev if e["typeId"]==1 and has_q(e,210)),
-            "prog_passes":  0,  # filled below after passes built
-            "tackles":      sum(1 for e in mead_ev if e["typeId"]==7),
-            "interceptions":sum(1 for e in mead_ev if e["typeId"]==8),
-            "dribbles":     sum(1 for e in mead_ev if e["typeId"]==3),
-            "succ_dribbles":sum(1 for e in mead_ev if e["typeId"]==3 and e.get("outcome")==1),
-        })
-
-        # ── Mead individual events ────────────────────────────────────────
-        for e in mead_ev:
-            tid     = e.get("typeId")
-            x,y     = e.get("x"), e.get("y")
-            outcome = e.get("outcome",0)
-            period  = e.get("periodId",1)
-            if None in (x,y): continue
-            base = dict(x=x,y=y,season=season,outcome=outcome,period=period,
-                        date=date_str,opponent=opponent)
+            period = e.get("periodId", 1)
+            base   = dict(x=x, y=y, season=season, outcome=outcome,
+                          period=period, date=date_str, opponent=opponent)
+            touches.append(base)
 
             if tid == 1:
-                ex_s,ey_s = get_q(e,140), get_q(e,141)
-                if None in (ex_s,ey_s): continue
-                end_x,end_y = float(ex_s),float(ey_s)
-                is_key  = has_q(e,210)
-                is_prog = outcome==1 and end_x-x>=10 and end_x>50
-                dist    = math.hypot(end_x-x, end_y-y)
-                passes.append({**base,"end_x":end_x,"end_y":end_y,
-                                "key_pass":is_key,"progressive":is_prog,"dist":dist})
-
+                ex_s, ey_s = get_q(e,140), get_q(e,141)
+                if ex_s and ey_s:
+                    end_x, end_y = float(ex_s), float(ey_s)
+                    is_key  = has_q(e, 210)
+                    is_prog = outcome==1 and end_x-x>=10 and end_x>50
+                    passes.append({**base, "end_x":end_x, "end_y":end_y,
+                                   "key_pass":is_key, "progressive":is_prog,
+                                   "dist":math.hypot(end_x-x, end_y-y)})
+                    match_agg["passes"] += 1
+                    if outcome == 1: match_agg["succ_passes"] += 1
+                    if is_key:       match_agg["key_passes"]  += 1
+                    if is_prog:      match_agg["prog_passes"] += 1
             elif tid in (13,14,15,16):
-                foot = get_q(e,56) or "Unknown"
-                shots.append({**base,"type_id":tid,"foot":foot})
-
+                shots.append({**base, "type_id":tid, "foot":get_q(e,56) or "Unknown"})
+                match_agg["shots"] += 1
+                if tid == 16: match_agg["goals"] += 1
             elif tid == 3:
                 dribbles.append(base)
+                match_agg["dribbles"] += 1
+                if outcome == 1: match_agg["succ_dribbles"] += 1
 
             if tid in (7,8,12,74):
                 lm = {7:"Tackle",8:"Interception",12:"Clearance",74:"Block"}
-                def_acts.append({**base,"action":lm[tid]})
+                def_acts.append({**base, "action":lm[tid]})
+                if tid == 7: match_agg["tackles"]       += 1
+                if tid == 8: match_agg["interceptions"] += 1
 
-            touches.append(base)
+        match_rows.append({"match_id":fname.replace(".json",""),
+                            "date":date_str,"opponent":opponent,
+                            "season":season, **match_agg})
 
     # back-fill progressive pass count in match_rows
     prog_by_match = Counter()
@@ -498,17 +497,18 @@ with tab_terr:
 with tab_net:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
-    edges_f=[e for e in net_edges if e["season"] in selected_seasons]
-    pos_f  =[p for p in net_pos   if p["season"] in selected_seasons]
+    # net tuples: (passer, recipient, season) and (player, x, y, season)
+    edges_f=[(p,r) for p,r,s in net_edges if s in selected_seasons]
+    pos_f  =[(pl,x,y) for pl,x,y,s in net_pos if s in selected_seasons]
     if not edges_f:
         st.info("No pass network data for selected season(s).")
     else:
         avg_pos=defaultdict(lambda:{"x":[],"y":[]})
-        for p in pos_f: avg_pos[p["player"]]["x"].append(p["x"]); avg_pos[p["player"]]["y"].append(p["y"])
+        for pl,x,y in pos_f: avg_pos[pl]["x"].append(x); avg_pos[pl]["y"].append(y)
         avg_pos={pl:(np.mean(v["x"]),np.mean(v["y"])) for pl,v in avg_pos.items()}
         pair_counts=Counter()
-        for e in edges_f: pair_counts[tuple(sorted([e["passer"],e["recipient"]]))]+=1
-        player_pass=Counter(e["passer"] for e in edges_f)
+        for p,r in edges_f: pair_counts[tuple(sorted([p,r]))]+=1
+        player_pass=Counter(p for p,r in edges_f)
         players=[p for p in avg_pos if player_pass[p]>0]
         min_edge=max(2,int(np.percentile(list(pair_counts.values()),30)))
         pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color="#2d333b",
@@ -549,7 +549,9 @@ with tab_net:
 with tab_sonar:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
-    sp_f=[p for p in sonar_passes if p["season"] in selected_seasons]
+    # sonar tuples: (player, angle, dist, outcome, season)
+    sp_f=[{"player":pl,"angle":a,"dist":d,"outcome":o,"season":s}
+          for pl,a,d,o,s in sonar_passes if s in selected_seasons]
     if not sp_f:
         st.info("No sonar data for selected season(s).")
     else:
@@ -569,8 +571,8 @@ with tab_sonar:
         with mid: st.pyplot(fig_m,width="stretch")
         plt.close(fig_m)
         st.markdown("<hr>",unsafe_allow_html=True)
-        edges_f=[e for e in net_edges if e["season"] in selected_seasons]
-        pair_counts=Counter(tuple(sorted([e["passer"],e["recipient"]])) for e in edges_f)
+        edges_f=[(p,r) for p,r,s in net_edges if s in selected_seasons]
+        pair_counts=Counter(tuple(sorted([p,r])) for p,r in edges_f)
         top_p=[]
         for (p1,p2),_ in pair_counts.most_common():
             for p in ([p1] if p2=="B. Mead" else ([p2] if p1=="B. Mead" else [])):
@@ -879,7 +881,9 @@ with tab_style:
 
     # ── pass direction breakdown ─────────────────────────────────────────
     ax3=fig.add_subplot(gs[2]); ax3.set_facecolor("#161b22")
-    sp_mead=[p for p in sonar_passes if p["player"]=="B. Mead" and p["season"] in selected_seasons]
+    sp_mead=[{"player":pl,"angle":a,"dist":d,"outcome":o,"season":s}
+             for pl,a,d,o,s in sonar_passes
+             if pl=="B. Mead" and s in selected_seasons]
     def dir_label(angle):
         if -45<=angle<45:   return "Forward"
         if 45<=angle<135:   return "Left"
