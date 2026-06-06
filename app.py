@@ -24,9 +24,10 @@ st.set_page_config(
 
 # ── global CSS ────────────────────────────────────────────────────────────────
 
-st.markdown("""
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
+# Fonts via st.html (not sanitised)
+st.html('<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">')
+# CSS wrapped in display:none div so text is hidden but styles apply
+st.markdown('''<div style="display:none"><style>'
 
 /* ═══ RESET & BASE ═══════════════════════════════════════════════════════════ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -216,8 +217,7 @@ hr {
     border-radius: 10px !important;
     color: #8a93a8 !important;
 }
-</style>
-""", unsafe_allow_html=True)
+</style></div>''', unsafe_allow_html=True)
 
 # ── palette ───────────────────────────────────────────────────────────────────
 
@@ -396,7 +396,7 @@ seasons_available = sorted(set(p["season"] for p in passes))
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("""
+    st.html("""
     <div style="padding:28px 4px 4px">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
         <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);
@@ -408,7 +408,7 @@ with st.sidebar:
         </div>
       </div>
       <div style="height:1px;background:linear-gradient(90deg,#f59e0b33,transparent);margin-bottom:20px"></div>
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
     st.markdown("### Season")
     selected_seasons = st.multiselect("season", seasons_available, seasons_available, label_visibility="collapsed")
@@ -436,7 +436,7 @@ with st.sidebar:
       Opta / Women's Super League<br>
       Seasons 2015 – 2026<br>
       <span style="color:#f59e0b">mplsoccer</span> visualisations
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
 # ── filter functions ──────────────────────────────────────────────────────────
 
@@ -555,7 +555,7 @@ total_g = sum(1 for s in shots if s["type_id"]==16)
 total_p = len(passes)
 total_s = len(shots)
 
-st.markdown(f"""
+st.html(f"""
 <div style="
   background: linear-gradient(135deg, #0c0f18 0%, #0f1525 50%, #0a0d15 100%);
   border-bottom: 1px solid #151c28;
@@ -634,7 +634,7 @@ st.markdown(f"""
     </span>
   </div>
 </div>
-""", unsafe_allow_html=True)
+""")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TABS
