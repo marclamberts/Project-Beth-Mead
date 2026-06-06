@@ -269,13 +269,21 @@ def add_legend(ax, items, loc="lower left"):
               facecolor="#161b22", edgecolor="#30363d",
               labelcolor="#c9d1d9", handlelength=1.2, borderpad=.7, labelspacing=.5)
 
-# ── half-space zone constants ────────────────────────────────────────────────
+# ── zone constants ────────────────────────────────────────────────────────────
 
 HS_L = (17, 37)   # left  half-space  y range on Opta 0-100 scale
 HS_R = (63, 83)   # right half-space  y range
 
 def in_halfspace(y):
     return HS_L[0] <= y <= HS_L[1] or HS_R[0] <= y <= HS_R[1]
+
+# Zone 14: central pocket between the penalty area and the midfield third
+# x = 66-83 (depth), y = 21-79 (central channel, excludes wide areas)
+Z14_X = (66, 83)
+Z14_Y = (21, 79)
+
+def in_zone14(x, y):
+    return Z14_X[0] <= x <= Z14_X[1] and Z14_Y[0] <= y <= Z14_Y[1]
 
 # ── data loading ──────────────────────────────────────────────────────────────
 
@@ -412,6 +420,7 @@ VIZZES = [
     {"id":"shot_map",   "icon":"🥅","title":"Shot Map",          "cat":"Attacking",  "desc":"Half-pitch shot scatter — goals, saves, posts and misses"},
     {"id":"shot_zones", "icon":"🎯","title":"Shot Zones",        "cat":"Attacking",  "desc":"Binned shot heatmap of the attacking half with individual shots overlaid"},
     {"id":"dribbles",   "icon":"🏃","title":"Dribbles",          "cat":"Attacking",  "desc":"Take-on scatter map showing where Mead beats opponents"},
+    {"id":"zone14",     "icon":"🟡","title":"Zone 14",            "cat":"Attacking",  "desc":"Actions in and around Zone 14 — the pocket between the box and the midfield third"},
     {"id":"heat_map",   "icon":"🔥","title":"Heat Map",          "cat":"Movement",   "desc":"KDE density of all actions showing zones of influence"},
     {"id":"territory",  "icon":"🗺","title":"Territory Map",     "cat":"Movement",   "desc":"12×8 binned action-count grid revealing dominant zones"},
     {"id":"career",     "icon":"📈","title":"Career Timeline",   "cat":"Analysis",   "desc":"Season-by-season line charts for goals, assists, shots, passes and more"},
@@ -1740,6 +1749,184 @@ elif st.session_state.page == "defensive":
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 17 – PERCENTILE CHART
+# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
+# ZONE 14
+# ═══════════════════════════════════════════════════════════════════════════════
+elif st.session_state.page == "zone14":
+    back_btn()
+    fp = f_passes(passes); fs = f_shots(shots); fd = f_def(def_acts)
+    metric_row(fp, fs, fd)
+    st.markdown(DIVIDER, unsafe_allow_html=True)
+
+    all_p  = f_season(passes)
+    all_s  = f_season(shots)
+    all_t  = f_season(touches)
+    all_dr = f_season(dribbles)
+
+    # ── classify ──────────────────────────────────────────────────────────
+    # passes: from Z14, into Z14, key passes from Z14
+    p_from  = [p for p in all_p if in_zone14(p["x"], p["y"])]
+    p_into  = [p for p in all_p if not in_zone14(p["x"], p["y"]) and in_zone14(p["end_x"], p["end_y"])]
+    p_z14   = [p for p in all_p if in_zone14(p["x"], p["y"]) or in_zone14(p["end_x"], p["end_y"])]
+    shots_z = [s for s in all_s if in_zone14(s["x"], s["y"])]
+    goals_z = [s for s in shots_z if s["type_id"] == 16]
+    drbs_z  = [d for d in all_dr if in_zone14(d["x"], d["y"])]
+    touch_z = [t for t in all_t if in_zone14(t["x"], t["y"])]
+    key_z   = [p for p in p_from if p["key_pass"]]
+
+    # ── sub-metrics ───────────────────────────────────────────────────────
+    r1c1, r1c2, r1c3, r1c4, r1c5, r1c6 = st.columns(6)
+    for col, label, val, color in [
+        (r1c1, "Zone 14 Touches",   len(touch_z),                         C_YELLOW),
+        (r1c2, "Passes From Z14",   len(p_from),                          C_BLUE),
+        (r1c3, "Passes Into Z14",   len(p_into),                          C_BLUE),
+        (r1c4, "Key Passes Z14",    len(key_z),                           C_GREEN),
+        (r1c5, "Shots From Z14",    len(shots_z),                         C_ORANGE),
+        (r1c6, "Goals From Z14",    len(goals_z),                         C_YELLOW),
+    ]:
+        col.markdown(
+            f"<div style='background:linear-gradient(160deg,#0f1420,#0c111d);"
+            f"border:1px solid #1a2235;border-top:2px solid {color};"
+            f"border-radius:10px;padding:16px;text-align:center'>"
+            f"<div style='font-family:Space Grotesk,sans-serif;font-size:26px;"
+            f"font-weight:800;color:{color};line-height:1'>{val}</div>"
+            f"<div style='font-size:9px;font-weight:700;text-transform:uppercase;"
+            f"letter-spacing:.1em;color:#4b5563;margin-top:5px'>{label}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(DIVIDER, unsafe_allow_html=True)
+
+    # ── view toggle ───────────────────────────────────────────────────────
+    z14_view = st.radio(
+        "Show",
+        ["All actions", "Passes from Zone 14", "Passes into Zone 14",
+         "Shots", "Dribbles", "Heat density"],
+        horizontal=True,
+    )
+
+    # ── build two-panel layout ────────────────────────────────────────────
+    left_col, right_col = st.columns([3, 1])
+
+    with left_col:
+        pitch = Pitch(pitch_type="opta", pitch_color=PITCH_BG, line_color=PITCH_LINE,
+                      linewidth=1.0, goal_type="box", line_zorder=3)
+        fig, ax = pitch.draw(figsize=(13, 9))
+        fig.patch.set_facecolor(FIG_BG)
+
+        # ── Zone 14 overlay ───────────────────────────────────────────────
+        from matplotlib.patches import Rectangle
+        rect = Rectangle(
+            (Z14_X[0], Z14_Y[0]),
+            Z14_X[1] - Z14_X[0],
+            Z14_Y[1] - Z14_Y[0],
+            linewidth=1.5, edgecolor=C_YELLOW, facecolor=C_YELLOW,
+            alpha=0.10, zorder=1, linestyle="--",
+        )
+        ax.add_patch(rect)
+        ax.text(
+            (Z14_X[0]+Z14_X[1])/2, (Z14_Y[0]+Z14_Y[1])/2,
+            "ZONE 14", ha="center", va="center",
+            fontsize=11, fontweight="900", color=C_YELLOW, alpha=0.35,
+            fontfamily="monospace", zorder=2,
+        )
+
+        # ── render chosen view ────────────────────────────────────────────
+        if z14_view == "All actions":
+            ORDER = {"unsuccessful":0,"successful":1,"progressive":2,"key":3}
+            for p in sorted(p_z14, key=lambda p: ORDER[pass_type(p)]):
+                color = PASS_COLOR[pass_type(p)]
+                alpha = 0.25 if p["outcome"]==0 else (0.80 if pass_type(p) in ("key","progressive") else 0.50)
+                pitch.arrows(p["x"],p["y"],p["end_x"],p["end_y"],
+                             ax=ax,color=color,alpha=alpha,width=1.1,headwidth=4,headlength=4,zorder=4)
+            for s in shots_z:
+                c,mk,sz,al,zo = SHOT_STYLE[s["type_id"]]
+                pitch.scatter([s["x"]],[s["y"]],ax=ax,c=c,marker=mk,s=sz,alpha=al,zorder=zo+3,
+                              edgecolors="white",linewidths=.3)
+
+        elif z14_view == "Passes from Zone 14":
+            for p in sorted(p_from, key=lambda p: ORDER[pass_type(p)] if False else 0):
+                color = PASS_COLOR[pass_type(p)]
+                alpha = 0.28 if p["outcome"]==0 else (0.82 if pass_type(p) in ("key","progressive") else 0.55)
+                pitch.arrows(p["x"],p["y"],p["end_x"],p["end_y"],
+                             ax=ax,color=color,alpha=alpha,width=1.3,headwidth=4.5,headlength=4.5,zorder=4)
+
+        elif z14_view == "Passes into Zone 14":
+            for p in p_into:
+                color = C_BLUE if p["outcome"]==1 else C_ORANGE
+                alpha = 0.65 if p["outcome"]==1 else 0.35
+                pitch.arrows(p["x"],p["y"],p["end_x"],p["end_y"],
+                             ax=ax,color=color,alpha=alpha,width=1.2,headwidth=4,headlength=4,zorder=4)
+
+        elif z14_view == "Shots":
+            for tid in (13,14,15,16):
+                sub = [s for s in shots_z if s["type_id"]==tid]
+                if sub:
+                    c,mk,sz,al,zo = SHOT_STYLE[tid]
+                    pitch.scatter([s["x"] for s in sub],[s["y"] for s in sub],
+                                  ax=ax,c=c,marker=mk,s=sz*1.2,alpha=al,zorder=zo+3,
+                                  edgecolors="white",linewidths=.5)
+
+        elif z14_view == "Dribbles":
+            for d in drbs_z:
+                c = C_GREEN if d["outcome"]==1 else C_ORANGE
+                ax.scatter(d["x"],d["y"],c=c,s=90,alpha=0.80,zorder=4,
+                           edgecolors="#0d1117",linewidths=.5)
+            if drbs_z:
+                add_legend(ax,[(C_GREEN,f"Successful ({sum(1 for d in drbs_z if d['outcome']==1)})"),
+                               (C_ORANGE,f"Unsuccessful ({sum(1 for d in drbs_z if d['outcome']==0)})")])
+
+        elif z14_view == "Heat density":
+            if touch_z:
+                cmap_z = LinearSegmentedColormap.from_list(
+                    "z14", [PITCH_BG,"#3d2800",C_YELLOW,"#ffffff"], N=256)
+                pitch.kdeplot([t["x"] for t in all_t],[t["y"] for t in all_t],
+                              ax=ax,cmap=cmap_z,fill=True,levels=100,
+                              alpha=.80,bw_adjust=.65,zorder=1)
+
+        add_title(fig, "Zone 14  ·  B. Mead",
+                  f"{season_label()}  ·  {z14_view}  ·  "
+                  f"x={Z14_X[0]}–{Z14_X[1]}, y={Z14_Y[0]}–{Z14_Y[1]} (Opta 0-100)")
+        plt.tight_layout(rect=[0,0,1,.94])
+        st.pyplot(fig, width="stretch")
+        plt.close(fig)
+
+    with right_col:
+        # ── Z14 season breakdown table ────────────────────────────────────
+        st.markdown(
+            "<div style='font-size:10px;font-weight:700;text-transform:uppercase;"
+            "letter-spacing:.1em;color:#f59e0b;margin-bottom:12px'>Season Breakdown</div>",
+            unsafe_allow_html=True,
+        )
+        for s in seasons_available:
+            if s not in selected_seasons:
+                continue
+            sp = [p for p in passes   if p["season"]==s]
+            ss = [sh for sh in shots  if sh["season"]==s]
+            st_  = [t for t in touches if t["season"]==s]
+            pf  = sum(1 for p in sp if in_zone14(p["x"],p["y"]))
+            pi  = sum(1 for p in sp if not in_zone14(p["x"],p["y"]) and in_zone14(p["end_x"],p["end_y"]))
+            sf  = sum(1 for sh in ss if in_zone14(sh["x"],sh["y"]))
+            gf  = sum(1 for sh in ss if in_zone14(sh["x"],sh["y"]) and sh["type_id"]==16)
+            tz  = sum(1 for t in st_ if in_zone14(t["x"],t["y"]))
+            st.markdown(
+                f"<div style='background:#0f1420;border:1px solid #1a2235;"
+                f"border-left:2px solid #f59e0b;border-radius:8px;"
+                f"padding:10px 12px;margin-bottom:8px'>"
+                f"<div style='font-size:11px;font-weight:700;color:#f59e0b;"
+                f"margin-bottom:6px'>{s.replace('WSL ','')}</div>"
+                f"<div style='font-size:10px;color:#6b7280;line-height:1.9'>"
+                f"Touches: <b style='color:#e8eaf0'>{tz}</b><br>"
+                f"Passes from: <b style='color:#3b82f6'>{pf}</b><br>"
+                f"Passes into: <b style='color:#3b82f6'>{pi}</b><br>"
+                f"Shots: <b style='color:#f97316'>{sf}</b><br>"
+                f"Goals: <b style='color:#f59e0b'>{gf}</b>"
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
+
 # ═══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.page == "percentile":
     back_btn()
