@@ -16,7 +16,7 @@ from mplsoccer import Pitch, VerticalPitch
 # ── page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Beth Mead | WSL Analytics",
+    page_title="Beth Mead | Data Portfolio",
     layout="wide",
     page_icon="⚽",
     initial_sidebar_state="expanded",
@@ -25,55 +25,211 @@ st.set_page_config(
 # ── global CSS ────────────────────────────────────────────────────────────────
 
 st.markdown("""
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-html, body, [data-testid="stAppViewContainer"] {
-    background-color: #0e1117; color: #e6edf3;
-    font-family: 'Inter', 'Helvetica Neue', sans-serif;
+
+/* ═══ RESET & BASE ═══════════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+.main {
+    background: #07090f !important;
+    color: #e8eaf0 !important;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
 }
+
+/* ═══ HIDE STREAMLIT CHROME ════════════════════════════════════════════════ */
+#MainMenu, footer, header,
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+.viewerBadge_container__r5tak,
+.stDeployButton { display: none !important; visibility: hidden !important; }
+
+/* ═══ REMOVE DEFAULT PADDING ═════════════════════════════════════════════ */
+.main .block-container {
+    padding: 0 !important;
+    max-width: 100% !important;
+}
+section[data-testid="stSidebar"] > div:first-child {
+    padding-top: 0 !important;
+}
+
+/* ═══ SCROLLBAR ══════════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #07090f; }
+::-webkit-scrollbar-thumb { background: #1e2530; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #2a3346; }
+
+/* ═══ SIDEBAR ════════════════════════════════════════════════════════════ */
 [data-testid="stSidebar"] {
-    background-color: #161b22; border-right: 1px solid #30363d;
+    background: #0c0f18 !important;
+    border-right: 1px solid #151c28 !important;
 }
-[data-testid="stSidebar"] * { color: #e6edf3 !important; }
+[data-testid="stSidebar"] * { color: #c8cdd8 !important; }
+[data-testid="stSidebar"] .stMarkdown p {
+    font-size: 12px !important;
+    color: #5a6478 !important;
+}
+
+/* sidebar section labels */
+[data-testid="stSidebar"] h3 {
+    font-family: 'Space Grotesk', sans-serif !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.12em !important;
+    color: #3b82f6 !important;
+    margin: 16px 0 6px !important;
+}
+
+/* sidebar checkbox */
+[data-testid="stSidebar"] [data-testid="stCheckbox"] label {
+    font-size: 13px !important;
+    color: #8a93a8 !important;
+}
+[data-testid="stSidebar"] [data-testid="stCheckbox"] label:hover {
+    color: #e8eaf0 !important;
+}
+
+/* sidebar multiselect */
+[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    background: #111520 !important;
+    border: 1px solid #1e2530 !important;
+    border-radius: 8px !important;
+}
+
+/* ═══ TABS ════════════════════════════════════════════════════════════════ */
 [data-baseweb="tab-list"] {
-    background-color: #161b22 !important; border-radius: 8px;
-    padding: 4px; gap: 4px; border: 1px solid #30363d;
+    background: #0c0f18 !important;
+    border-bottom: 1px solid #151c28 !important;
+    border-radius: 0 !important;
+    padding: 0 24px !important;
+    gap: 0 !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
 }
 [data-baseweb="tab"] {
-    background-color: transparent !important; color: #8b949e !important;
-    border-radius: 6px !important; font-weight: 600 !important;
-    font-size: 13px !important; padding: 8px 14px !important; border: none !important;
+    background: transparent !important;
+    color: #5a6478 !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.02em !important;
+    padding: 14px 16px !important;
+    text-transform: uppercase !important;
+    transition: all 0.15s ease !important;
+}
+[data-baseweb="tab"]:hover {
+    color: #c8cdd8 !important;
+    background: transparent !important;
 }
 [aria-selected="true"][data-baseweb="tab"] {
-    background-color: #21262d !important; color: #58a6ff !important;
+    color: #f59e0b !important;
+    border-bottom: 2px solid #f59e0b !important;
+    background: transparent !important;
 }
-[data-baseweb="tab"]:hover { color: #e6edf3 !important; background-color: #21262d !important; }
+[data-testid="stTabContent"] {
+    padding: 32px 32px 48px !important;
+    background: #07090f !important;
+}
+
+/* ═══ METRICS (custom, override native) ════════════════════════════════ */
 [data-testid="stMetric"] {
-    background-color: #161b22; border: 1px solid #30363d;
-    border-radius: 8px; padding: 14px 18px;
+    background: linear-gradient(135deg, #0f1420 0%, #111827 100%) !important;
+    border: 1px solid #1a2235 !important;
+    border-top: 2px solid #f59e0b !important;
+    border-radius: 12px !important;
+    padding: 20px !important;
+    transition: border-color 0.2s !important;
 }
-[data-testid="stMetricLabel"] { color: #8b949e !important; font-size: 11px !important;
-    text-transform: uppercase; letter-spacing: 0.05em; }
-[data-testid="stMetricValue"] { color: #e6edf3 !important; font-size: 22px !important;
-    font-weight: 700 !important; }
-hr { border-color: #30363d !important; }
-[data-testid="stCheckbox"] label { color: #c9d1d9 !important; font-size: 13px !important; }
-h3 { color: #58a6ff !important; font-size: 13px !important; text-transform: uppercase;
-     letter-spacing: 0.08em; font-weight: 700 !important; margin-bottom: 6px !important; }
-[data-testid="stDataFrame"] { border: 1px solid #30363d; border-radius: 8px; }
+[data-testid="stMetric"]:hover {
+    border-color: #f59e0b !important;
+    border-top-color: #f59e0b !important;
+}
+[data-testid="stMetricLabel"] {
+    font-family: 'Space Grotesk', sans-serif !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    color: #5a6478 !important;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'Space Grotesk', sans-serif !important;
+    font-size: 28px !important;
+    font-weight: 700 !important;
+    color: #f1f5f9 !important;
+    line-height: 1.1 !important;
+}
+
+/* ═══ DIVIDER ════════════════════════════════════════════════════════════ */
+hr {
+    border: none !important;
+    border-top: 1px solid #151c28 !important;
+    margin: 24px 0 !important;
+}
+
+/* ═══ SELECT / DROPDOWN ══════════════════════════════════════════════════ */
+[data-baseweb="select"] > div {
+    background: #0f1420 !important;
+    border: 1px solid #1e2530 !important;
+    border-radius: 8px !important;
+    color: #c8cdd8 !important;
+}
+
+/* ═══ DATAFRAME ══════════════════════════════════════════════════════════ */
+[data-testid="stDataFrame"] {
+    border: 1px solid #1a2235 !important;
+    border-radius: 12px !important;
+    overflow: hidden !important;
+}
+[data-testid="stDataFrame"] th {
+    background: #0c0f18 !important;
+    color: #5a6478 !important;
+    font-size: 11px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+}
+[data-testid="stDataFrame"] td {
+    font-size: 13px !important;
+    color: #c8cdd8 !important;
+}
+
+/* ═══ EXPANDER ═══════════════════════════════════════════════════════════ */
+[data-testid="stExpander"] {
+    border: 1px solid #1a2235 !important;
+    border-radius: 10px !important;
+    background: #0c0f18 !important;
+}
+
+/* ═══ INFO / WARNING ═════════════════════════════════════════════════════ */
+[data-testid="stAlert"] {
+    background: #0c0f18 !important;
+    border: 1px solid #1a2235 !important;
+    border-radius: 10px !important;
+    color: #8a93a8 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ── palette ───────────────────────────────────────────────────────────────────
 
-PITCH_BG   = "#0d1117"
-PITCH_LINE = "#c9d1d9"
-FIG_BG     = "#0e1117"
-C_BLUE     = "#58a6ff"
-C_ORANGE   = "#f78166"
-C_GREEN    = "#3fb950"
-C_PURPLE   = "#bc8cff"
-C_YELLOW   = "#e3b341"
-C_MUTED    = "#484f58"
+PITCH_BG   = "#0a0d15"
+PITCH_LINE = "#d1d5db"
+FIG_BG     = "#07090f"
+C_BLUE     = "#3b82f6"
+C_ORANGE   = "#f97316"
+C_GREEN    = "#10b981"
+C_PURPLE   = "#a78bfa"
+C_YELLOW   = "#f59e0b"
+C_MUTED    = "#374151"
 
 PASS_COLOR = {"key": C_BLUE, "progressive": C_GREEN, "successful": C_YELLOW, "unsuccessful": C_ORANGE}
 SHOT_STYLE = {16: (C_YELLOW,"*",300,.95,4), 15: (C_BLUE,"o",130,.85,3),
@@ -241,37 +397,46 @@ seasons_available = sorted(set(p["season"] for p in passes))
 
 with st.sidebar:
     st.markdown("""
-    <div style='padding:16px 0 8px'>
-      <div style='font-size:20px;font-weight:800;color:#e6edf3;letter-spacing:-.3px'>Beth Mead</div>
-      <div style='font-size:12px;color:#8b949e;margin-top:2px'>Arsenal WFC · Forward</div>
-      <div style='height:1px;background:#30363d;margin:14px 0'></div>
+    <div style="padding:28px 4px 4px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+        <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);
+             display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">⚽</div>
+        <div>
+          <div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:700;
+               color:#f1f5f9;letter-spacing:-.3px;line-height:1.2">Beth Mead</div>
+          <div style="font-size:11px;color:#4b5563;margin-top:1px">Arsenal WFC · Forward</div>
+        </div>
+      </div>
+      <div style="height:1px;background:linear-gradient(90deg,#f59e0b33,transparent);margin-bottom:20px"></div>
     </div>""", unsafe_allow_html=True)
 
-    st.markdown("### 🗓 Season")
+    st.markdown("### Season")
     selected_seasons = st.multiselect("season", seasons_available, seasons_available, label_visibility="collapsed")
 
-    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>", unsafe_allow_html=True)
-    st.markdown("### 🎯 Pass Filters")
+    st.markdown("### Pass Filters")
     show_succ   = st.checkbox("Successful",             value=True)
     show_unsucc = st.checkbox("Unsuccessful",           value=True)
     show_prog   = st.checkbox("Progressive",            value=True)
     show_key    = st.checkbox("Shot Assist / Key Pass", value=True)
 
-    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>", unsafe_allow_html=True)
-    st.markdown("### 🥅 Shot Filters")
-    show_goals   = st.checkbox("Goal (16)",                 value=True)
-    show_on_tgt  = st.checkbox("On Target / Saved (15)",    value=True)
-    show_post    = st.checkbox("Post (14)",                 value=True)
-    show_off_tgt = st.checkbox("Off Target (13)",           value=True)
+    st.markdown("### Shot Filters")
+    show_goals   = st.checkbox("Goal",              value=True)
+    show_on_tgt  = st.checkbox("On Target / Saved", value=True)
+    show_post    = st.checkbox("Post",              value=True)
+    show_off_tgt = st.checkbox("Off Target",        value=True)
 
-    st.markdown("<div style='height:1px;background:#30363d;margin:12px 0'></div>", unsafe_allow_html=True)
-    st.markdown("### 🛡 Defensive Filters")
+    st.markdown("### Defensive Filters")
     all_def = ["Tackle","Interception","Clearance","Block"]
     sel_def = st.multiselect("def", all_def, all_def, label_visibility="collapsed")
 
-    st.markdown("<div style='height:1px;background:#30363d;margin:16px 0 8px'></div>", unsafe_allow_html=True)
-    st.markdown("<div style='font-size:11px;color:#484f58;line-height:1.6'>Data: Opta / WSL<br>Viz: mplsoccer</div>",
-                unsafe_allow_html=True)
+    st.markdown("""
+    <div style="margin-top:32px;padding:14px;background:#0c0f18;border:1px solid #151c28;
+         border-radius:10px;font-size:11px;color:#374151;line-height:1.8">
+      <div style="color:#4b5563;font-weight:600;margin-bottom:4px">DATA SOURCE</div>
+      Opta / Women's Super League<br>
+      Seasons 2015 – 2026<br>
+      <span style="color:#f59e0b">mplsoccer</span> visualisations
+    </div>""", unsafe_allow_html=True)
 
 # ── filter functions ──────────────────────────────────────────────────────────
 
@@ -319,19 +484,32 @@ def season_label():
 def metric_row(fp, fs, fd, extra=None):
     total_p = len(fp); succ_p = sum(1 for p in fp if p["outcome"]==1)
     goals   = sum(1 for s in fs if s["type_id"]==16)
-    cols = st.columns(8)
     data_m = [
-        ("Passes",        f"{total_p:,}"),
-        ("Pass Acc",      f"{round(succ_p/total_p*100,1) if total_p else 0}%"),
-        ("Progressive",   f"{sum(1 for p in fp if p['progressive']):,}"),
-        ("Shot Assists",  f"{sum(1 for p in fp if p['key_pass']):,}"),
-        ("Shots",         f"{len(fs):,}"),
-        ("Goals",         f"{goals:,}"),
-        ("Tackles",       f"{sum(1 for d in fd if d['action']=='Tackle'):,}"),
-        ("Interceptions", f"{sum(1 for d in fd if d['action']=='Interception'):,}"),
+        ("Passes",        f"{total_p:,}",                                          "🎯"),
+        ("Pass Acc",      f"{round(succ_p/total_p*100,1) if total_p else 0}%",    "📊"),
+        ("Progressive",   f"{sum(1 for p in fp if p['progressive']):,}",           "⬆️"),
+        ("Shot Assists",  f"{sum(1 for p in fp if p['key_pass']):,}",              "🔑"),
+        ("Shots",         f"{len(fs):,}",                                          "🔫"),
+        ("Goals",         f"{goals:,}",                                            "⚽"),
+        ("Tackles",       f"{sum(1 for d in fd if d['action']=='Tackle'):,}",      "🛡"),
+        ("Interceptions", f"{sum(1 for d in fd if d['action']=='Interception'):,}","✂️"),
     ]
-    for col,(lbl,val) in zip(cols,data_m):
-        col.metric(lbl,val)
+    cards = "".join(f"""
+    <div style="background:linear-gradient(160deg,#0f1420,#0c111d);
+         border:1px solid #1a2235;border-top:2px solid #f59e0b;
+         border-radius:12px;padding:18px 16px;text-align:center;
+         transition:transform .15s;cursor:default">
+      <div style="font-size:18px;margin-bottom:6px">{icon}</div>
+      <div style="font-family:'Space Grotesk',sans-serif;font-size:24px;
+           font-weight:700;color:#f1f5f9;line-height:1">{val}</div>
+      <div style="font-size:10px;font-weight:600;letter-spacing:.1em;
+           text-transform:uppercase;color:#4b5563;margin-top:6px">{lbl}</div>
+    </div>""" for lbl,val,icon in data_m)
+    st.markdown(
+        f"<div style='display:grid;grid-template-columns:repeat(8,1fr);gap:12px;margin-bottom:8px'>"
+        f"{cards}</div>",
+        unsafe_allow_html=True,
+    )
 
 # ── sonar helper ──────────────────────────────────────────────────────────────
 
@@ -370,15 +548,92 @@ def draw_sonar(ax, player_passes, title, highlight=False, fontsize_title=10):
                  fontweight="bold" if highlight else "normal", pad=8)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HEADER
+# HERO HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
 
+total_g = sum(1 for s in shots if s["type_id"]==16)
+total_p = len(passes)
+total_s = len(shots)
+
 st.markdown(f"""
-<div style='display:flex;align-items:baseline;gap:12px;margin-bottom:4px'>
-  <span style='font-size:26px;font-weight:800;color:#e6edf3;letter-spacing:-.5px'>Beth Mead</span>
-  <span style='font-size:13px;color:#8b949e;font-weight:500'>WSL Analytics Dashboard</span>
+<div style="
+  background: linear-gradient(135deg, #0c0f18 0%, #0f1525 50%, #0a0d15 100%);
+  border-bottom: 1px solid #151c28;
+  padding: 40px 36px 32px;
+  position: relative;
+  overflow: hidden;
+">
+  <!-- decorative gradient blob -->
+  <div style="position:absolute;top:-60px;right:-60px;width:300px;height:300px;
+       background:radial-gradient(circle,#f59e0b18 0%,transparent 70%);
+       pointer-events:none"></div>
+  <div style="position:absolute;bottom:-80px;right:200px;width:200px;height:200px;
+       background:radial-gradient(circle,#3b82f618 0%,transparent 70%);
+       pointer-events:none"></div>
+
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;
+       flex-wrap:wrap;gap:24px;position:relative">
+
+    <!-- left: player info -->
+    <div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <div style="width:6px;height:36px;background:linear-gradient(180deg,#f59e0b,#ef4444);
+             border-radius:3px"></div>
+        <div>
+          <div style="font-family:'Space Grotesk',sans-serif;font-size:42px;
+               font-weight:800;color:#f1f5f9;letter-spacing:-1.5px;line-height:1">
+            Beth Mead
+          </div>
+          <div style="font-size:13px;color:#6b7280;margin-top:4px;letter-spacing:.04em">
+            Arsenal WFC &nbsp;·&nbsp; Right Winger &nbsp;·&nbsp;
+            <span style="color:#f59e0b">WSL {seasons_available[0].replace("WSL ","") if seasons_available else ""} – {seasons_available[-1].replace("WSL ","") if seasons_available else ""}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- right: career headline stats -->
+    <div style="display:flex;gap:32px;flex-wrap:wrap">
+      <div style="text-align:center">
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:36px;
+             font-weight:800;color:#f59e0b;line-height:1">{total_g}</div>
+        <div style="font-size:10px;font-weight:600;letter-spacing:.1em;
+             text-transform:uppercase;color:#4b5563;margin-top:4px">Career Goals</div>
+      </div>
+      <div style="width:1px;background:#1e2a36;align-self:stretch"></div>
+      <div style="text-align:center">
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:36px;
+             font-weight:800;color:#3b82f6;line-height:1">{total_p:,}</div>
+        <div style="font-size:10px;font-weight:600;letter-spacing:.1em;
+             text-transform:uppercase;color:#4b5563;margin-top:4px">Passes</div>
+      </div>
+      <div style="width:1px;background:#1e2a36;align-self:stretch"></div>
+      <div style="text-align:center">
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:36px;
+             font-weight:800;color:#10b981;line-height:1">{total_s}</div>
+        <div style="font-size:10px;font-weight:600;letter-spacing:.1em;
+             text-transform:uppercase;color:#4b5563;margin-top:4px">Shots</div>
+      </div>
+      <div style="width:1px;background:#1e2a36;align-self:stretch"></div>
+      <div style="text-align:center">
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:36px;
+             font-weight:800;color:#a78bfa;line-height:1">{len(seasons_available)}</div>
+        <div style="font-size:10px;font-weight:600;letter-spacing:.1em;
+             text-transform:uppercase;color:#4b5563;margin-top:4px">Seasons</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- active filter strip -->
+  <div style="margin-top:20px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <span style="font-size:10px;font-weight:600;letter-spacing:.1em;
+         text-transform:uppercase;color:#374151">Filtered:</span>
+    <span style="background:#f59e0b1a;border:1px solid #f59e0b44;border-radius:99px;
+         padding:3px 12px;font-size:11px;color:#f59e0b;font-weight:600">
+      {season_label()}
+    </span>
+  </div>
 </div>
-<div style='font-size:12px;color:#484f58;margin-bottom:16px'>{season_label()}</div>
 """, unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -401,7 +656,7 @@ st.markdown(f"""
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_pass:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch,fig,ax = make_pitch(figsize=(16,10))
     ORDER={"unsuccessful":0,"successful":1,"progressive":2,"key":3}
     for p in sorted(fp, key=lambda p:ORDER[pass_type(p)]):
@@ -426,7 +681,7 @@ with tab_pass:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_shot:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch=VerticalPitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
                         linewidth=1.0,goal_type="box",half=True,line_zorder=2)
     fig,ax=pitch.draw(figsize=(10,8)); fig.patch.set_facecolor(FIG_BG)
@@ -451,7 +706,7 @@ with tab_shot:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_heat:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts); ft=f_season(touches)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
                 linewidth=1.2,goal_type="box",line_zorder=2)
     fig,ax=pitch.draw(figsize=(16,10)); fig.patch.set_facecolor(FIG_BG)
@@ -469,7 +724,7 @@ with tab_heat:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_terr:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts); ft=f_season(touches)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
                 linewidth=1.2,goal_type="box",line_zorder=2)
     fig,ax=pitch.draw(figsize=(16,10)); fig.patch.set_facecolor(FIG_BG)
@@ -496,7 +751,7 @@ with tab_terr:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_net:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     # net tuples: (passer, recipient, season) and (player, x, y, season)
     edges_f=[(p,r) for p,r,s in net_edges if s in selected_seasons]
     pos_f  =[(pl,x,y) for pl,x,y,s in net_pos if s in selected_seasons]
@@ -548,7 +803,7 @@ with tab_net:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_sonar:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     # sonar tuples: (player, angle, dist, outcome, season)
     sp_f=[{"player":pl,"angle":a,"dist":d,"outcome":o,"season":s}
           for pl,a,d,o,s in sonar_passes if s in selected_seasons]
@@ -570,7 +825,7 @@ with tab_sonar:
         _,mid,_=st.columns([1,2,1])
         with mid: st.pyplot(fig_m,width="stretch")
         plt.close(fig_m)
-        st.markdown("<hr>",unsafe_allow_html=True)
+        st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
         edges_f=[(p,r) for p,r,s in net_edges if s in selected_seasons]
         pair_counts=Counter(tuple(sorted([p,r])) for p,r in edges_f)
         top_p=[]
@@ -599,7 +854,7 @@ with tab_sonar:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_drib:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     dr=f_season(dribbles)
     succ_d=sum(1 for d in dr if d["outcome"]==1)
     total_d=len(dr)
@@ -607,7 +862,7 @@ with tab_drib:
     c1.metric("Total Take-Ons", f"{total_d:,}")
     c2.metric("Successful",     f"{succ_d:,}")
     c3.metric("Success Rate",   f"{round(succ_d/total_d*100,1) if total_d else 0}%")
-    st.markdown("<hr>",unsafe_allow_html=True)
+    st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch,fig,ax=make_pitch(figsize=(16,10))
     for d in dr:
         color=C_GREEN if d["outcome"]==1 else C_ORANGE
@@ -624,7 +879,7 @@ with tab_drib:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_cross:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     # crosses: passes from wide channels (y<25 or y>75) into final third (end_x>67)
     all_p=f_season(passes)
     crosses=[p for p in all_p if (p["y"]<25 or p["y"]>75) and p["end_x"]>67]
@@ -633,7 +888,7 @@ with tab_cross:
     c1.metric("Crosses",    f"{len(crosses):,}")
     c2.metric("Successful", f"{succ_c:,}")
     c3.metric("Success Rate",f"{round(succ_c/len(crosses)*100,1) if crosses else 0}%")
-    st.markdown("<hr>",unsafe_allow_html=True)
+    st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch,fig,ax=make_pitch(figsize=(16,10))
     for c in crosses:
         color=C_BLUE if c["outcome"]==1 else C_ORANGE
@@ -650,7 +905,7 @@ with tab_cross:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_szones:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch=VerticalPitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
                         linewidth=1.0,goal_type="box",half=True,line_zorder=2)
     fig,ax=pitch.draw(figsize=(10,9)); fig.patch.set_facecolor(FIG_BG)
@@ -685,7 +940,7 @@ with tab_szones:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_career:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     career = {}
     for s in seasons_available:
         sp=[p for p in passes   if p["season"]==s]
@@ -726,7 +981,7 @@ with tab_career:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_match:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     mr_f=[r for r in match_rows if r["season"] in selected_seasons]
     mr_f.sort(key=lambda r:r["date"])
     if not mr_f:
@@ -769,7 +1024,7 @@ with tab_match:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_radar:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     st.markdown("<div style='font-size:12px;color:#8b949e;margin-bottom:12px'>"
                 "Each season normalised to Mead's career best (100 = personal best). "
                 "Select up to 3 seasons to compare.</div>",unsafe_allow_html=True)
@@ -839,7 +1094,7 @@ with tab_radar:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_style:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     all_p=f_season(passes); all_s=f_season(shots)
     fig=plt.figure(figsize=(16,6),facecolor=FIG_BG)
     gs=gridspec.GridSpec(1,3,figure=fig,wspace=.35)
@@ -913,7 +1168,7 @@ with tab_style:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_compare:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     c1,c2=st.columns(2)
     with c1: s1=st.selectbox("Season A",seasons_available,
                               index=max(0,len(seasons_available)-2),key="cmp1")
@@ -945,7 +1200,7 @@ with tab_compare:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_oppo:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     mr_f=[r for r in match_rows if r["season"] in selected_seasons]
     if not mr_f:
         st.info("No data for selected season(s).")
@@ -1010,7 +1265,7 @@ ARCH_COLORS = {
 
 with tab_arch:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
 
     st.markdown(
         "<div style='font-size:12px;color:#8b949e;margin-bottom:16px'>"
@@ -1201,7 +1456,7 @@ with tab_arch:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_def:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
-    metric_row(fp,fs,fd); st.markdown("<hr>",unsafe_allow_html=True)
+    metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch,fig,ax=make_pitch(figsize=(16,10))
     MARKER={"Tackle":"s","Interception":"D","Clearance":"o","Block":"^"}
     for d in fd:
