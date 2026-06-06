@@ -641,14 +641,14 @@ st.html(f"""
 # ═══════════════════════════════════════════════════════════════════════════════
 
 (tab_pass, tab_shot, tab_heat, tab_terr, tab_net, tab_sonar,
- tab_drib, tab_cross, tab_szones, tab_career, tab_match,
+ tab_drib, tab_cross, tab_hs, tab_szones, tab_career, tab_match,
  tab_radar, tab_style, tab_compare, tab_oppo, tab_arch,
  tab_def, tab_perc) = st.tabs([
     "🎯 Pass Map",    "🥅 Shot Map",    "🔥 Heat Map",    "🗺 Territory",
     "🔗 Pass Network","🧭 Pass Sonars", "🏃 Dribbles",    "↗️ Crossings",
-    "🎯 Shot Zones",  "📈 Career",      "📅 Match Stats", "🍕 Radar",
-    "📏 Style",       "🔄 Season Compare","🆚 Opposition", "🧬 Archetypes",
-    "🛡 Defensive",   "📊 Percentile",
+    "◈ Half Spaces",  "🎯 Shot Zones",  "📈 Career",      "📅 Match Stats",
+    "🍕 Radar",       "📏 Style",       "🔄 Season Compare","🆚 Opposition",
+    "🧬 Archetypes",  "🛡 Defensive",   "📊 Percentile",
 ])
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -901,7 +901,143 @@ with tab_cross:
     plt.tight_layout(rect=[0,0,1,.94]); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 9 – SHOT ZONES
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9 – HALF-SPACE PASSES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Half-spaces: the channels between the wide areas and the central lane.
+# On an Opta 0-100 pitch: left HS y=17-37, right HS y=63-83
+HS_L = (17, 37)   # left half-space  (low y side)
+HS_R = (63, 83)   # right half-space (high y side)
+
+def in_halfspace(y):
+    return HS_L[0] <= y <= HS_L[1] or HS_R[0] <= y <= HS_R[1]
+
+with tab_hs:
+    fp = f_passes(passes); fs = f_shots(shots); fd = f_def(def_acts)
+    metric_row(fp, fs, fd)
+    st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>', unsafe_allow_html=True)
+
+    all_p = f_season(passes)
+
+    # Classify passes
+    hs_passes = [p for p in all_p if in_halfspace(p["y"]) or in_halfspace(p["end_y"])]
+    hs_from   = [p for p in all_p if in_halfspace(p["y"])]
+    hs_into   = [p for p in all_p if not in_halfspace(p["y"]) and in_halfspace(p["end_y"])]
+    hs_thru   = [p for p in all_p if in_halfspace(p["y"]) and in_halfspace(p["end_y"])]
+
+    succ_hs = sum(1 for p in hs_passes if p["outcome"] == 1)
+
+    # sub-metrics
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Half-Space Passes",  f"{len(hs_passes):,}")
+    c2.metric("From Half-Space",    f"{len(hs_from):,}")
+    c3.metric("Into Half-Space",    f"{len(hs_into):,}")
+    c4.metric("HS Accuracy",        f"{round(succ_hs/len(hs_passes)*100,1) if hs_passes else 0}%")
+
+    st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:16px 0 24px"></div>', unsafe_allow_html=True)
+
+    # ── filter toggle ─────────────────────────────────────────────────────
+    hs_view = st.radio(
+        "Show passes",
+        ["All half-space", "From half-space", "Into half-space", "Through half-space"],
+        horizontal=True,
+    )
+    view_map = {
+        "All half-space":       hs_passes,
+        "From half-space":      hs_from,
+        "Into half-space":      hs_into,
+        "Through half-space":   hs_thru,
+    }
+    view_passes = view_map[hs_view]
+
+    # ── pitch ─────────────────────────────────────────────────────────────
+    pitch = Pitch(pitch_type="opta", pitch_color=PITCH_BG, line_color=PITCH_LINE,
+                  linewidth=1.0, goal_type="box", line_zorder=3)
+    fig, ax = pitch.draw(figsize=(16, 10))
+    fig.patch.set_facecolor(FIG_BG)
+
+    # shade half-space zones
+    for y0, y1 in (HS_L, HS_R):
+        ax.axhspan(y0, y1, color="#f59e0b", alpha=0.06, zorder=1)
+        ax.axhspan(y0, y1, color="#f59e0b", alpha=0.0, zorder=1)
+        # dashed boundary lines
+        for y_line in (y0, y1):
+            ax.axhline(y_line, color="#f59e0b", linewidth=0.7,
+                       linestyle="--", alpha=0.35, zorder=2)
+
+    # zone labels
+    for y_mid, label in [((HS_L[0]+HS_L[1])/2, "LEFT\nHALF-SPACE"),
+                          ((HS_R[0]+HS_R[1])/2, "RIGHT\nHALF-SPACE")]:
+        ax.text(2, y_mid, label, ha="left", va="center",
+                fontsize=6.5, color="#f59e0b", alpha=0.55,
+                fontweight="700", fontfamily="monospace")
+
+    # draw arrows
+    ORDER = {"unsuccessful": 0, "successful": 1, "progressive": 2, "key": 3}
+    for p in sorted(view_passes, key=lambda p: ORDER[pass_type(p)]):
+        pt    = pass_type(p)
+        color = PASS_COLOR[pt]
+        alpha = 0.25 if pt == "unsuccessful" else (0.85 if pt in ("key","progressive") else 0.55)
+        pitch.arrows(p["x"], p["y"], p["end_x"], p["end_y"],
+                     ax=ax, color=color, alpha=alpha,
+                     width=1.2, headwidth=4, headlength=4, zorder=4)
+
+    items = [
+        (PASS_COLOR["successful"],   f"Successful ({sum(1 for p in view_passes if p['outcome']==1 and not p['key_pass'] and not p['progressive'])})"),
+        (PASS_COLOR["unsuccessful"], f"Unsuccessful ({sum(1 for p in view_passes if p['outcome']==0)})"),
+        (PASS_COLOR["progressive"],  f"Progressive ({sum(1 for p in view_passes if p['progressive'])})"),
+        (PASS_COLOR["key"],          f"Shot Assist ({sum(1 for p in view_passes if p['key_pass'])})"),
+        ("#f59e0b",                  "Half-Space Zone"),
+    ]
+    add_legend(ax, items)
+
+    succ_v = sum(1 for p in view_passes if p["outcome"]==1)
+    total_v = len(view_passes)
+    add_title(
+        fig, "Half-Space Passes  ·  B. Mead",
+        f"{season_label()}  ·  {hs_view}  ·  "
+        f"{total_v:,} passes  ·  {round(succ_v/total_v*100,1) if total_v else 0}% accuracy"
+    )
+    plt.tight_layout(rect=[0, 0, 1, .94])
+    st.pyplot(fig, width="stretch")
+    plt.close(fig)
+
+    # ── zone split breakdown ─────────────────────────────────────────────
+    st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:24px 0 20px"></div>', unsafe_allow_html=True)
+    st.markdown("**Zone breakdown**", unsafe_allow_html=False)
+
+    bc1, bc2, bc3 = st.columns(3)
+    for col, zone_passes, label in [
+        (bc1, hs_from, "Passes FROM half-space"),
+        (bc2, hs_into, "Passes INTO half-space"),
+        (bc3, hs_thru, "Passes THROUGH half-space"),
+    ]:
+        total_z = len(zone_passes)
+        succ_z  = sum(1 for p in zone_passes if p["outcome"] == 1)
+        prog_z  = sum(1 for p in zone_passes if p["progressive"])
+        key_z   = sum(1 for p in zone_passes if p["key_pass"])
+        col.markdown(
+            f"<div style='background:#0f1420;border:1px solid #1a2235;"
+            f"border-left:3px solid #f59e0b;border-radius:10px;"
+            f"padding:16px 18px;margin-bottom:8px'>"
+            f"<div style='font-size:10px;font-weight:700;text-transform:uppercase;"
+            f"letter-spacing:.1em;color:#f59e0b;margin-bottom:10px'>{label}</div>"
+            f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:10px'>"
+            f"<div><div style='font-size:22px;font-weight:800;color:#f1f5f9'>{total_z}</div>"
+            f"<div style='font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.06em'>Total</div></div>"
+            f"<div><div style='font-size:22px;font-weight:800;color:#10b981'>"
+            f"{round(succ_z/total_z*100,1) if total_z else 0}%</div>"
+            f"<div style='font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.06em'>Accuracy</div></div>"
+            f"<div><div style='font-size:22px;font-weight:800;color:#3b82f6'>{prog_z}</div>"
+            f"<div style='font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.06em'>Progressive</div></div>"
+            f"<div><div style='font-size:22px;font-weight:800;color:#a78bfa'>{key_z}</div>"
+            f"<div style='font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.06em'>Shot Assists</div></div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+# 10 – SHOT ZONES
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_szones:
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
