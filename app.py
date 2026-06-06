@@ -269,6 +269,14 @@ def add_legend(ax, items, loc="lower left"):
               facecolor="#161b22", edgecolor="#30363d",
               labelcolor="#c9d1d9", handlelength=1.2, borderpad=.7, labelspacing=.5)
 
+# ── half-space zone constants ────────────────────────────────────────────────
+
+HS_L = (17, 37)   # left  half-space  y range on Opta 0-100 scale
+HS_R = (63, 83)   # right half-space  y range
+
+def in_halfspace(y):
+    return HS_L[0] <= y <= HS_L[1] or HS_R[0] <= y <= HS_R[1]
+
 # ── data loading ──────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner="Loading data…")
@@ -393,48 +401,117 @@ def load_data():
 passes,shots,touches,def_acts,dribbles,net_edges,net_pos,sonar_passes,match_rows = load_data()
 seasons_available = sorted(set(p["season"] for p in passes))
 
+# ── navigation state ──────────────────────────────────────────────────────────
+
+VIZZES = [
+    {"id":"pass_map",   "icon":"🎯","title":"Pass Map",          "cat":"Passing",    "desc":"All passes coloured by type — successful, progressive, key passes and shot assists"},
+    {"id":"pass_net",   "icon":"🔗","title":"Pass Network",      "cat":"Passing",    "desc":"Player nodes connected by pass volume with B. Mead centralised"},
+    {"id":"pass_sonar", "icon":"🧭","title":"Pass Sonars",       "cat":"Passing",    "desc":"Direction wheels showing where Mead plays the ball and her top partners"},
+    {"id":"half_space", "icon":"◈", "title":"Half-Space Passes", "cat":"Passing",    "desc":"Passes through the half-space channels with zone overlay and breakdown"},
+    {"id":"crossings",  "icon":"↗️","title":"Crossings",         "cat":"Passing",    "desc":"Passes from wide channels into the final third"},
+    {"id":"shot_map",   "icon":"🥅","title":"Shot Map",          "cat":"Attacking",  "desc":"Half-pitch shot scatter — goals, saves, posts and misses"},
+    {"id":"shot_zones", "icon":"🎯","title":"Shot Zones",        "cat":"Attacking",  "desc":"Binned shot heatmap of the attacking half with individual shots overlaid"},
+    {"id":"dribbles",   "icon":"🏃","title":"Dribbles",          "cat":"Attacking",  "desc":"Take-on scatter map showing where Mead beats opponents"},
+    {"id":"heat_map",   "icon":"🔥","title":"Heat Map",          "cat":"Movement",   "desc":"KDE density of all actions showing zones of influence"},
+    {"id":"territory",  "icon":"🗺","title":"Territory Map",     "cat":"Movement",   "desc":"12×8 binned action-count grid revealing dominant zones"},
+    {"id":"career",     "icon":"📈","title":"Career Timeline",   "cat":"Analysis",   "desc":"Season-by-season line charts for goals, assists, shots, passes and more"},
+    {"id":"match_stats","icon":"📅","title":"Match Stats",       "cat":"Analysis",   "desc":"Bar chart and data table of any metric broken down per game"},
+    {"id":"radar",      "icon":"🍕","title":"Radar Chart",       "cat":"Analysis",   "desc":"Spider chart comparing up to three seasons across ten metrics"},
+    {"id":"style",      "icon":"📏","title":"Style Analysis",    "cat":"Analysis",   "desc":"Pass length distribution, shooting foot split and direction breakdown"},
+    {"id":"percentile", "icon":"📊","title":"Percentile Chart",  "cat":"Analysis",   "desc":"Horizontal bars showing each season relative to career best"},
+    {"id":"compare",    "icon":"🔄","title":"Season Compare",    "cat":"Comparison", "desc":"Side-by-side pass maps for any two seasons"},
+    {"id":"opposition", "icon":"🆚","title":"Opposition",        "cat":"Comparison", "desc":"Any metric ranked and broken down by opponent team"},
+    {"id":"archetypes", "icon":"🧬","title":"Archetypes",        "cat":"Comparison", "desc":"Six forward archetypes scored per season with radar and matrix"},
+    {"id":"defensive",  "icon":"🛡","title":"Defensive Actions", "cat":"Defensive",  "desc":"Tackle, interception, clearance and block scatter map"},
+]
+
+CAT_ORDER  = ["Passing","Attacking","Movement","Analysis","Comparison","Defensive"]
+CAT_COLOR  = {"Passing":"#3b82f6","Attacking":"#f59e0b","Movement":"#10b981",
+               "Analysis":"#a78bfa","Comparison":"#f97316","Defensive":"#ef4444"}
+
+if "page" not in st.session_state:
+    st.session_state.page = "home"
+
+def nav(page_id):
+    st.session_state.page = page_id
+
+
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
+    # brand
     st.html("""
-    <div style="padding:28px 4px 4px">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
-        <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);
-             display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">⚽</div>
+    <div style="padding:24px 4px 4px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+        <div style="width:38px;height:38px;border-radius:50%;
+             background:linear-gradient(135deg,#f59e0b,#ef4444);
+             display:flex;align-items:center;justify-content:center;
+             font-size:17px;flex-shrink:0">⚽</div>
         <div>
-          <div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:700;
-               color:#f1f5f9;letter-spacing:-.3px;line-height:1.2">Beth Mead</div>
-          <div style="font-size:11px;color:#4b5563;margin-top:1px">Arsenal WFC · Forward</div>
+          <div style="font-family:'Space Grotesk',sans-serif;font-size:16px;
+               font-weight:700;color:#f1f5f9;letter-spacing:-.2px">Beth Mead</div>
+          <div style="font-size:10px;color:#4b5563">Arsenal WFC · Forward</div>
         </div>
       </div>
-      <div style="height:1px;background:linear-gradient(90deg,#f59e0b33,transparent);margin-bottom:20px"></div>
+      <div style="height:1px;background:linear-gradient(90deg,#f59e0b44,transparent);
+           margin-bottom:16px"></div>
     </div>""")
 
-    st.markdown("### Season")
-    selected_seasons = st.multiselect("season", seasons_available, seasons_available, label_visibility="collapsed")
+    # home button
+    if st.button("🏠  Home", use_container_width=True, key="home_btn",
+                 type="secondary"):
+        nav("home")
 
-    st.markdown("### Pass Filters")
-    show_succ   = st.checkbox("Successful",             value=True)
-    show_unsucc = st.checkbox("Unsuccessful",           value=True)
-    show_prog   = st.checkbox("Progressive",            value=True)
-    show_key    = st.checkbox("Shot Assist / Key Pass", value=True)
+    # nav by category
+    st.html('<div style="height:1px;background:#151c28;margin:14px 0 10px"></div>')
+    st.markdown("### Visualisations")
 
-    st.markdown("### Shot Filters")
-    show_goals   = st.checkbox("Goal",              value=True)
-    show_on_tgt  = st.checkbox("On Target / Saved", value=True)
-    show_post    = st.checkbox("Post",              value=True)
-    show_off_tgt = st.checkbox("Off Target",        value=True)
+    for cat in CAT_ORDER:
+        cat_vizzes = [v for v in VIZZES if v["cat"] == cat]
+        color = CAT_COLOR[cat]
+        st.html(f'<div style="font-size:9px;font-weight:700;text-transform:uppercase;'
+                f'letter-spacing:.12em;color:{color};margin:12px 0 4px;padding-left:2px">'
+                f'{cat}</div>')
+        for v in cat_vizzes:
+            active = st.session_state.page == v["id"]
+            label  = f"{'▶ ' if active else ''}{v['icon']}  {v['title']}"
+            if st.button(label, key=f"nav_{v['id']}", use_container_width=True,
+                         type="primary" if active else "secondary"):
+                nav(v["id"])
 
-    st.markdown("### Defensive Filters")
-    all_def = ["Tackle","Interception","Clearance","Block"]
-    sel_def = st.multiselect("def", all_def, all_def, label_visibility="collapsed")
+    # filters (shown only on viz pages)
+    if st.session_state.page != "home":
+        st.html('<div style="height:1px;background:#151c28;margin:16px 0 10px"></div>')
+        st.markdown("### Season")
+        selected_seasons = st.multiselect("season", seasons_available, seasons_available,
+                                          label_visibility="collapsed")
+        st.markdown("### Pass Filters")
+        show_succ   = st.checkbox("Successful",             value=True)
+        show_unsucc = st.checkbox("Unsuccessful",           value=True)
+        show_prog   = st.checkbox("Progressive",            value=True)
+        show_key    = st.checkbox("Shot Assist / Key Pass", value=True)
+        st.markdown("### Shot Filters")
+        show_goals   = st.checkbox("Goal",              value=True)
+        show_on_tgt  = st.checkbox("On Target / Saved", value=True)
+        show_post    = st.checkbox("Post",              value=True)
+        show_off_tgt = st.checkbox("Off Target",        value=True)
+        st.markdown("### Defensive Filters")
+        all_def = ["Tackle","Interception","Clearance","Block"]
+        sel_def = st.multiselect("def", all_def, all_def, label_visibility="collapsed")
+    else:
+        # defaults so filter vars always exist
+        selected_seasons = seasons_available
+        show_succ = show_unsucc = show_prog = show_key = True
+        show_goals = show_on_tgt = show_post = show_off_tgt = True
+        all_def = ["Tackle","Interception","Clearance","Block"]
+        sel_def = all_def[:]
 
-    st.markdown("""
-    <div style="margin-top:32px;padding:14px;background:#0c0f18;border:1px solid #151c28;
-         border-radius:10px;font-size:11px;color:#374151;line-height:1.8">
-      <div style="color:#4b5563;font-weight:600;margin-bottom:4px">DATA SOURCE</div>
-      Opta / Women's Super League<br>
-      Seasons 2015 – 2026<br>
+    st.html("""
+    <div style="margin-top:24px;padding:12px;background:#0c0f18;
+         border:1px solid #151c28;border-radius:8px;
+         font-size:10px;color:#374151;line-height:1.8">
+      <div style="color:#4b5563;font-weight:600;margin-bottom:3px">DATA SOURCE</div>
+      Opta / Women's Super League<br>Seasons 2015 – 2026<br>
       <span style="color:#f59e0b">mplsoccer</span> visualisations
     </div>""")
 
@@ -637,24 +714,92 @@ st.html(f"""
 """)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TABS
+# ROUTER  –  landing page or individual visualisation
 # ═══════════════════════════════════════════════════════════════════════════════
 
-(tab_pass, tab_shot, tab_heat, tab_terr, tab_net, tab_sonar,
- tab_drib, tab_cross, tab_hs, tab_szones, tab_career, tab_match,
- tab_radar, tab_style, tab_compare, tab_oppo, tab_arch,
- tab_def, tab_perc) = st.tabs([
-    "🎯 Pass Map",    "🥅 Shot Map",    "🔥 Heat Map",    "🗺 Territory",
-    "🔗 Pass Network","🧭 Pass Sonars", "🏃 Dribbles",    "↗️ Crossings",
-    "◈ Half Spaces",  "🎯 Shot Zones",  "📈 Career",      "📅 Match Stats",
-    "🍕 Radar",       "📏 Style",       "🔄 Season Compare","🆚 Opposition",
-    "🧬 Archetypes",  "🛡 Defensive",   "📊 Percentile",
-])
+DIVIDER = '<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>'
+
+def back_btn():
+    """Breadcrumb + back button shown at the top of every viz page."""
+    cur = next((v for v in VIZZES if v["id"] == st.session_state.page), None)
+    if not cur:
+        return
+    cat_color = CAT_COLOR.get(cur["cat"], "#f59e0b")
+    st.html(f"""
+    <div style="display:flex;align-items:center;gap:12px;
+         padding:16px 0 0;margin-bottom:4px">
+      <span style="font-size:11px;color:#374151">
+        <span style="color:#4b5563">Home</span>
+        <span style="margin:0 6px;color:#252c3a">›</span>
+        <span style="color:{cat_color}">{cur['cat']}</span>
+        <span style="margin:0 6px;color:#252c3a">›</span>
+        <span style="color:#f1f5f9;font-weight:600">{cur['title']}</span>
+      </span>
+    </div>""")
+    if st.button("← Back to Home", key="back_top"):
+        nav("home")
+    st.markdown(DIVIDER, unsafe_allow_html=True)
+
+# ── LANDING PAGE ──────────────────────────────────────────────────────────────
+
+if st.session_state.page == "home":
+    # landing page cards
+    by_cat = {}
+    for v in VIZZES:
+        by_cat.setdefault(v["cat"], []).append(v)
+
+    for cat in CAT_ORDER:
+        cat_vizzes = by_cat.get(cat, [])
+        if not cat_vizzes:
+            continue
+        color = CAT_COLOR[cat]
+        st.html(f"""
+        <div style="margin:32px 0 14px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:3px;height:18px;background:{color};border-radius:2px"></div>
+            <span style="font-family:'Space Grotesk',sans-serif;font-size:11px;
+                 font-weight:700;text-transform:uppercase;letter-spacing:.12em;
+                 color:{color}">{cat}</span>
+          </div>
+        </div>""")
+
+        cols = st.columns(min(len(cat_vizzes), 4))
+        for col, v in zip(cols, cat_vizzes):
+            with col:
+                st.html(f"""
+                <div style="background:linear-gradient(160deg,#0f1420,#0c111d);
+                     border:1px solid #1a2235;border-top:2px solid {color};
+                     border-radius:12px;padding:20px 18px 14px;height:100%;
+                     min-height:130px">
+                  <div style="font-size:26px;margin-bottom:10px">{v['icon']}</div>
+                  <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;
+                       font-weight:700;color:#f1f5f9;margin-bottom:6px">{v['title']}</div>
+                  <div style="font-size:11px;color:#4b5563;line-height:1.5">
+                    {v['desc']}</div>
+                </div>""")
+                if st.button(f"Open  →", key=f"card_{v['id']}", use_container_width=True):
+                    nav(v["id"])
+
+    st.html("""
+    <div style="margin-top:48px;padding:20px;background:#0c0f18;
+         border:1px solid #151c28;border-radius:12px;
+         display:flex;align-items:center;gap:16px">
+      <div style="font-size:28px">📊</div>
+      <div>
+        <div style="font-size:13px;font-weight:600;color:#e8eaf0;margin-bottom:3px">
+          19 visualisations across 6 categories</div>
+        <div style="font-size:11px;color:#4b5563">
+          Opta event data · WSL 2015–2026 · Beth Mead · Arsenal WFC
+        </div>
+      </div>
+    </div>""")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1 – PASS MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_pass:
+elif st.session_state.page == "pass_map":
+    back_btn()
+
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch,fig,ax = make_pitch(figsize=(16,10))
@@ -679,7 +824,8 @@ with tab_pass:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2 – SHOT MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_shot:
+elif st.session_state.page == "shot_map":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch=VerticalPitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
@@ -704,7 +850,8 @@ with tab_shot:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3 – HEAT MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_heat:
+elif st.session_state.page == "heat_map":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts); ft=f_season(touches)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
@@ -722,7 +869,8 @@ with tab_heat:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4 – TERRITORY MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_terr:
+elif st.session_state.page == "territory":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts); ft=f_season(touches)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch=Pitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
@@ -749,7 +897,8 @@ with tab_terr:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 5 – PASS NETWORK
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_net:
+elif st.session_state.page == "pass_net":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     # net tuples: (passer, recipient, season) and (player, x, y, season)
@@ -801,7 +950,8 @@ with tab_net:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 6 – PASS SONARS
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_sonar:
+elif st.session_state.page == "pass_sonar":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     # sonar tuples: (player, angle, dist, outcome, season)
@@ -852,7 +1002,8 @@ with tab_sonar:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 7 – DRIBBLE MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_drib:
+elif st.session_state.page == "dribbles":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     dr=f_season(dribbles)
@@ -877,7 +1028,8 @@ with tab_drib:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 8 – CROSSING MAP
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_cross:
+elif st.session_state.page == "crossings":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     # crosses: passes from wide channels (y<25 or y>75) into final third (end_x>67)
@@ -905,15 +1057,8 @@ with tab_cross:
 # 9 – HALF-SPACE PASSES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Half-spaces: the channels between the wide areas and the central lane.
-# On an Opta 0-100 pitch: left HS y=17-37, right HS y=63-83
-HS_L = (17, 37)   # left half-space  (low y side)
-HS_R = (63, 83)   # right half-space (high y side)
-
-def in_halfspace(y):
-    return HS_L[0] <= y <= HS_L[1] or HS_R[0] <= y <= HS_R[1]
-
-with tab_hs:
+elif st.session_state.page == "half_space":
+    back_btn()
     fp = f_passes(passes); fs = f_shots(shots); fd = f_def(def_acts)
     metric_row(fp, fs, fd)
     st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>', unsafe_allow_html=True)
@@ -1039,7 +1184,8 @@ with tab_hs:
 
 # 10 – SHOT ZONES
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_szones:
+elif st.session_state.page == "shot_zones":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch=VerticalPitch(pitch_type="opta",pitch_color=PITCH_BG,line_color=PITCH_LINE,
@@ -1074,7 +1220,8 @@ with tab_szones:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 10 – CAREER TIMELINE
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_career:
+elif st.session_state.page == "career":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     career = {}
@@ -1115,7 +1262,8 @@ with tab_career:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 11 – MATCH BY MATCH
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_match:
+elif st.session_state.page == "match_stats":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     mr_f=[r for r in match_rows if r["season"] in selected_seasons]
@@ -1158,7 +1306,8 @@ with tab_match:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 12 – RADAR / PIZZA CHART
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_radar:
+elif st.session_state.page == "radar":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     st.markdown("<div style='font-size:12px;color:#8b949e;margin-bottom:12px'>"
@@ -1228,7 +1377,8 @@ with tab_radar:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 13 – STYLE ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_style:
+elif st.session_state.page == "style":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     all_p=f_season(passes); all_s=f_season(shots)
@@ -1302,7 +1452,8 @@ with tab_style:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 14 – SEASON COMPARE
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_compare:
+elif st.session_state.page == "compare":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     c1,c2=st.columns(2)
@@ -1334,7 +1485,8 @@ with tab_compare:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 15 – OPPOSITION BREAKDOWN
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_oppo:
+elif st.session_state.page == "opposition":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     mr_f=[r for r in match_rows if r["season"] in selected_seasons]
@@ -1376,30 +1528,10 @@ with tab_oppo:
         plt.tight_layout(); st.pyplot(fig,width="stretch"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════════════════
 # 16 – ARCHETYPES
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# Six forward/winger archetypes, each defined by weighted metric keys.
-ARCHETYPES = {
-    "⚽ Goal Scorer":       {"goals":3,      "shots":2,         "shot_acc":2,    "dribbles":1},
-    "🎨 Creative Playmaker":{"key_passes":3, "progressive":2,   "pass_acc":2,    "goals":1},
-    "🏃 Dynamic Dribbler":  {"dribbles":3,   "drib_success":2,  "shots":1,       "key_passes":1},
-    "↗️ Wide Creator":      {"crosses":3,    "key_passes":2,    "progressive":2, "pass_acc":1},
-    "🔥 Pressing Winger":   {"tackles":3,    "interceptions":2, "dribbles":1,    "shots":1},
-    "🎯 Box Threat":        {"shots":3,      "goals":2,         "shot_acc":2,    "dribbles":1},
-}
-
-ARCH_COLORS = {
-    "⚽ Goal Scorer":        C_YELLOW,
-    "🎨 Creative Playmaker": C_BLUE,
-    "🏃 Dynamic Dribbler":   C_GREEN,
-    "↗️ Wide Creator":       C_PURPLE,
-    "🔥 Pressing Winger":    C_ORANGE,
-    "🎯 Box Threat":         "#ff6e96",
-}
-
-with tab_arch:
+elif st.session_state.page == "archetypes":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
 
@@ -1590,7 +1722,8 @@ with tab_arch:
 
 # 17 – DEFENSIVE ACTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_def:
+elif st.session_state.page == "defensive":
+    back_btn()
     fp=f_passes(passes); fs=f_shots(shots); fd=f_def(def_acts)
     metric_row(fp,fs,fd); st.markdown('<div style="height:1px;background:linear-gradient(90deg,#f59e0b33,#3b82f633,transparent);margin:20px 0 28px"></div>',unsafe_allow_html=True)
     pitch,fig,ax=make_pitch(figsize=(16,10))
@@ -1608,7 +1741,8 @@ with tab_def:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 17 – PERCENTILE CHART
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_perc:
+elif st.session_state.page == "percentile":
+    back_btn()
     st.markdown("<div style='font-size:12px;color:#8b949e;margin-bottom:12px'>"
                 "Bars show each season relative to Mead's personal best "
                 "(100 = best season for that metric).</div>",unsafe_allow_html=True)
