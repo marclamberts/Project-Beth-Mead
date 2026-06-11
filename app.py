@@ -4,6 +4,7 @@ import os
 import math
 from collections import defaultdict, Counter
 
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -432,9 +433,11 @@ VIZZES = [
     {"id":"opposition", "icon":"🆚","title":"Opposition",        "cat":"Comparison", "desc":"Any metric ranked and broken down by opponent team"},
     {"id":"archetypes", "icon":"🧬","title":"Archetypes",        "cat":"Comparison", "desc":"Six forward archetypes scored per season with radar and matrix"},
     {"id":"defensive",  "icon":"🛡","title":"Defensive Actions", "cat":"Defensive",  "desc":"Tackle, interception, clearance and block scatter map"},
+    {"id":"sub_impact", "icon":"🔀","title":"Substitution Impact","cat":"Analysis",  "desc":"Monte Carlo simulation of player impact on/off the pitch — xG, xT, VAEP, EPV, G+, Goal Difference"},
 ]
 
 CAT_ORDER  = ["Passing","Attacking","Movement","Analysis","Comparison","Defensive"]
+# keep sub_impact in Analysis visually
 CAT_COLOR  = {"Passing":"#3b82f6","Attacking":"#f59e0b","Movement":"#10b981",
                "Analysis":"#a78bfa","Comparison":"#f97316","Defensive":"#ef4444"}
 
@@ -748,6 +751,44 @@ def back_btn():
     if st.button("← Back to Home", key="back_top"):
         nav("home")
     st.markdown(DIVIDER, unsafe_allow_html=True)
+
+# ── substitution impact model helpers ────────────────────────────────────────
+
+@st.cache_data
+def _load_xg_csvs():
+    base = os.path.dirname(__file__)
+    frames = []
+    for fp in glob.glob(os.path.join(base, "**", "xgCSV", "*.csv"), recursive=True):
+        try:
+            df = pd.read_csv(fp)
+            df["season"] = os.path.basename(os.path.dirname(os.path.dirname(fp)))
+            frames.append(df)
+        except Exception:
+            pass
+    if not frames:
+        return pd.DataFrame()
+    full = pd.concat(frames, ignore_index=True)
+    full.columns = [c.strip() for c in full.columns]
+    return full
+
+
+def _mc_net(on_mu, off_mu, sig_on, sig_off, n, mtype):
+    rng = np.random.default_rng()
+    if mtype == "poisson":
+        sim_on  = rng.poisson(np.clip(rng.normal(on_mu,  sig_on,  n), 0, None))
+        sim_off = rng.poisson(np.clip(rng.normal(off_mu, sig_off, n), 0, None))
+    else:
+        sim_on  = rng.normal(on_mu,  sig_on,  n)
+        sim_off = rng.normal(off_mu, sig_off, n)
+    return sim_on - sim_off
+
+
+def _pct(arr):
+    return {k: float(v) for k, v in zip(
+        ["p10","p25","p50","p75","p90","mean","pos_pct"],
+        [np.percentile(arr,10), np.percentile(arr,25), np.percentile(arr,50),
+         np.percentile(arr,75), np.percentile(arr,90), np.mean(arr), np.mean(arr>0)*100])}
+
 
 # ── LANDING PAGE ──────────────────────────────────────────────────────────────
 
@@ -1977,3 +2018,197 @@ elif st.session_state.page == "percentile":
                 ax.axvline(100,color="#30363d",linewidth=.8,linestyle="--",zorder=3)
                 ax.set_title(s.replace("WSL ",""),color=C_BLUE,fontsize=10,fontweight="800",pad=10)
                 plt.tight_layout(); st.pyplot(fig,width="stretch"); plt.close(fig)
+
+elif st.session_state.page == "sub_impact":
+    back_btn()
+    st.markdown("""
+<div style='margin-bottom:24px'>
+<span style='font-size:2rem;font-weight:900;color:#e8eaf0'>Substitution Impact Model</span><br>
+<span style='color:#8b949e;font-size:.95rem'>
+Monte Carlo simulation of player on/off-pitch contribution across six metrics.
+Configure per-metric means from your data, then run the simulator.
+</span>
+</div>
+""", unsafe_allow_html=True)
+
+    xg_df = _load_xg_csvs()
+
+    st.markdown("### Quick-fill from xG data")
+
+    if xg_df.empty:
+        st.info("No xG CSV files found — enter metric values manually below.")
+        selected_player = None
+        player_xg_on = 0.0
+        player_goals_on = 0.0
+    else:
+        all_players = sorted(xg_df["PlayerId"].dropna().unique().tolist()) if "PlayerId" in xg_df.columns else []
+        col_p1, col_p2 = st.columns([2, 1])
+        with col_p1:
+            selected_player = st.selectbox("Player", ["(manual entry)"] + all_players)
+        with col_p2:
+            role_filter = st.selectbox("Role context", ["All appearances", "Starter", "Substitute"])
+
+        if selected_player and selected_player != "(manual entry)" and "PlayerId" in xg_df.columns:
+            pdf = xg_df[xg_df["PlayerId"] == selected_player].copy()
+            if "timeMin" in pdf.columns and role_filter != "All appearances":
+                first_mins = pdf.groupby(["season", "Date"])["timeMin"].min().reset_index()
+                if role_filter == "Starter":
+                    starter_matches = first_mins[first_mins["timeMin"] <= 25][["season", "Date"]]
+                    pdf = pdf.merge(starter_matches, on=["season", "Date"])
+                else:
+                    sub_matches = first_mins[first_mins["timeMin"] > 45][["season", "Date"]]
+                    pdf = pdf.merge(sub_matches, on=["season", "Date"])
+
+            player_xg_on    = float(pdf["xG"].sum())    if "xG"     in pdf.columns else 0.0
+            player_goals_on = float(pdf["isGoal"].sum()) if "isGoal" in pdf.columns else 0.0
+            n_apps = pdf["Date"].nunique() if "Date" in pdf.columns else 0
+            gplus_on = player_goals_on - player_xg_on
+            st.markdown(
+                f"<span style='color:#8b949e;font-size:.85rem'>"
+                f"Found <b style='color:#e8eaf0'>{n_apps}</b> appearances · "
+                f"xG sum <b style='color:#3b82f6'>{player_xg_on:.2f}</b> · "
+                f"Goals <b style='color:#f59e0b'>{player_goals_on:.0f}</b> · "
+                f"G+ <b style='color:#10b981'>{gplus_on:+.2f}</b>"
+                f"</span>", unsafe_allow_html=True)
+        else:
+            player_xg_on = 0.0
+            player_goals_on = 0.0
+
+    st.markdown("---")
+    st.markdown("### Metric inputs (per 90 min averages)")
+    st.markdown("<span style='color:#8b949e;font-size:.85rem'>Enter player mean values when ON and OFF the pitch. "
+                "Off-pitch defaults to 70% of on-pitch as a starting point.</span>", unsafe_allow_html=True)
+
+    _METRICS = [
+        {"key": "xg",    "label": "xG",              "type": "poisson", "weight": 2.0, "color": "#3b82f6"},
+        {"key": "xt",    "label": "xT",               "type": "normal",  "weight": 1.5, "color": "#10b981"},
+        {"key": "vaep",  "label": "VAEP",             "type": "normal",  "weight": 1.5, "color": "#a78bfa"},
+        {"key": "epv",   "label": "EPV",              "type": "normal",  "weight": 1.0, "color": "#f97316"},
+        {"key": "gplus", "label": "G+ (Goals − xG)", "type": "normal",  "weight": 1.0, "color": "#f59e0b"},
+        {"key": "gd",    "label": "Goal Diff Added",  "type": "normal",  "weight": 2.0, "color": "#ef4444"},
+    ]
+
+    _gplus_default = round((player_goals_on - player_xg_on), 3) if (selected_player if 'selected_player' in dir() else None) and selected_player != "(manual entry)" else 0.01
+    _defaults = {
+        "xg":    (round(player_xg_on, 3), 0.05),
+        "xt":    (0.12, 0.04),
+        "vaep":  (0.08, 0.03),
+        "epv":   (0.10, 0.03),
+        "gplus": (_gplus_default, 0.05),
+        "gd":    (0.15, 0.08),
+    }
+
+    metric_inputs = {}
+    hcols = st.columns([2, 1.5, 1.5, 1.5, 1.5, 1])
+    for hc, hl in zip(hcols, ["Metric","On-pitch mean","Off-pitch mean","σ (on)","σ (off)","Weight"]):
+        hc.markdown(f"<span style='color:#484f58;font-size:.8rem'>{hl}</span>", unsafe_allow_html=True)
+
+    for m in _METRICS:
+        k = m["key"]
+        on_def, sig_def = _defaults.get(k, (0.10, 0.05))
+        mcols = st.columns([2, 1.5, 1.5, 1.5, 1.5, 1])
+        mcols[0].markdown(f"<span style='color:{m['color']};font-weight:700'>{m['label']}</span>", unsafe_allow_html=True)
+        on_mean  = mcols[1].number_input("", value=float(on_def),        step=0.01,  key=f"on_{k}",  label_visibility="collapsed", format="%.3f")
+        off_mean = mcols[2].number_input("", value=float(on_def * 0.7),  step=0.01,  key=f"off_{k}", label_visibility="collapsed", format="%.3f")
+        sig_on   = mcols[3].number_input("", value=float(sig_def),       step=0.005, key=f"son_{k}", label_visibility="collapsed", format="%.3f")
+        sig_off  = mcols[4].number_input("", value=float(sig_def),       step=0.005, key=f"sof_{k}", label_visibility="collapsed", format="%.3f")
+        weight   = mcols[5].number_input("", value=m["weight"], step=0.5, min_value=0.0, max_value=5.0, key=f"w_{k}", label_visibility="collapsed", format="%.1f")
+        metric_inputs[k] = {"on": on_mean, "off": off_mean, "sig_on": sig_on, "sig_off": sig_off,
+                            "weight": weight, "type": m["type"], "color": m["color"], "label": m["label"]}
+
+    st.markdown("---")
+    sc1, sc2, sc3 = st.columns([1, 1, 2])
+    with sc1:
+        n_sims = st.selectbox("Simulations", [5_000, 10_000, 50_000], index=1, format_func=lambda x: f"{x:,}")
+    with sc2:
+        sub_var = st.checkbox("Sub variance boost (×1.3σ)", value=True,
+                              help="Inflates σ for substitute appearances — reflects higher situational variance")
+    with sc3:
+        run_btn = st.button("▶  Run Monte Carlo", use_container_width=True, type="primary")
+
+    if run_btn:
+        results = {}
+        composite_sims = None
+        total_weight = sum(v["weight"] for v in metric_inputs.values())
+
+        with st.spinner("Running simulations…"):
+            for k, cfg in metric_inputs.items():
+                s_on  = cfg["sig_on"]  * (1.3 if sub_var else 1.0)
+                s_off = cfg["sig_off"] * (1.3 if sub_var else 1.0)
+                sims = _mc_net(cfg["on"], cfg["off"], s_on, s_off, n_sims, cfg["type"])
+                results[k] = _pct(sims)
+                results[k]["raw"] = sims
+                w = cfg["weight"] / total_weight if total_weight > 0 else 1
+                composite_sims = sims * w if composite_sims is None else composite_sims + sims * w
+
+        comp = _pct(composite_sims)
+
+        st.markdown("### Composite Net Impact Score")
+        cc1, cc2, cc3, cc4 = st.columns(4)
+        def _scard(col, lbl, val, clr):
+            col.markdown(
+                f"<div style='background:#161b22;border-radius:10px;padding:16px 20px;text-align:center'>"
+                f"<div style='color:#8b949e;font-size:.8rem;margin-bottom:4px'>{lbl}</div>"
+                f"<div style='color:{clr};font-size:1.8rem;font-weight:900'>{val:+.3f}</div>"
+                f"</div>", unsafe_allow_html=True)
+        _scard(cc1, "Mean",       comp["mean"],    C_BLUE)
+        _scard(cc2, "P10",        comp["p10"],     "#ef4444")
+        _scard(cc3, "P90",        comp["p90"],     C_GREEN)
+        _scard(cc4, "% Positive", comp["pos_pct"], "#f59e0b")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        fig_c, ax_c = plt.subplots(figsize=(12, 3.5))
+        fig_c.patch.set_facecolor(FIG_BG); ax_c.set_facecolor("#161b22")
+        ax_c.hist(composite_sims, bins=120, color=C_BLUE, alpha=0.75, edgecolor="none", density=True)
+        ax_c.axvline(0, color="#484f58", linewidth=1.2, linestyle="--")
+        ax_c.axvline(comp["mean"], color=C_BLUE,    linewidth=2,   label=f"Mean {comp['mean']:+.3f}")
+        ax_c.axvline(comp["p10"],  color="#ef4444", linewidth=1.5, linestyle=":", label=f"P10 {comp['p10']:+.3f}")
+        ax_c.axvline(comp["p90"],  color=C_GREEN,   linewidth=1.5, linestyle=":", label=f"P90 {comp['p90']:+.3f}")
+        ylim_top = ax_c.get_ylim()[1] or 1
+        ax_c.fill_betweenx([0, ylim_top], comp["p10"], comp["p90"], color=C_BLUE, alpha=0.08)
+        ax_c.set_title("Composite Net Impact Distribution (weighted)", color="#e8eaf0", fontsize=11, fontweight="800", pad=10)
+        ax_c.set_xlabel("Net impact (on − off)", color="#484f58", fontsize=9)
+        ax_c.set_ylabel("Density", color="#484f58", fontsize=9)
+        ax_c.tick_params(colors="#484f58", labelsize=8)
+        for sp in ax_c.spines.values(): sp.set_visible(False)
+        ax_c.legend(frameon=False, labelcolor="#e8eaf0", fontsize=8)
+        plt.tight_layout(); st.pyplot(fig_c, use_container_width=True); plt.close(fig_c)
+
+        st.markdown("---")
+        st.markdown("### Per-metric breakdown")
+
+        fig_m, axes = plt.subplots(1, len(_METRICS), figsize=(16, 4))
+        fig_m.patch.set_facecolor(FIG_BG)
+        for i, m in enumerate(_METRICS):
+            k = m["key"]; ax = axes[i]; ax.set_facecolor("#161b22")
+            r = results[k]
+            pv  = [r["p10"], r["p25"], r["p50"], r["p75"], r["p90"]]
+            lbls = ["P10", "P25", "P50", "P75", "P90"]
+            clrs = ["#ef4444", "#f97316", m["color"], "#10b981", "#10b981"]
+            y = np.arange(len(lbls))
+            ax.barh(y, pv, color=clrs, alpha=0.8, edgecolor="none", height=0.6)
+            ax.axvline(0, color="#484f58", linewidth=0.8, linestyle="--")
+            for j, v in enumerate(pv):
+                ax.text(v + (0.003 if v >= 0 else -0.003), j, f"{v:+.3f}",
+                        va="center", ha="left" if v >= 0 else "right",
+                        color="#e8eaf0", fontsize=7, fontweight="700")
+            ax.set_yticks(y); ax.set_yticklabels(lbls, color="#8b949e", fontsize=8)
+            ax.set_title(m["label"], color=m["color"], fontsize=10, fontweight="800", pad=8)
+            ax.tick_params(colors="#484f58", labelsize=7)
+            for sp in ax.spines.values(): sp.set_visible(False)
+            ax.set_xlabel(f"{r['pos_pct']:.0f}% positive", color="#484f58", fontsize=7)
+        plt.tight_layout(); st.pyplot(fig_m, use_container_width=True); plt.close(fig_m)
+
+        st.markdown("### Summary table")
+        rows = []
+        for m in _METRICS:
+            k = m["key"]; r = results[k]
+            on_v = metric_inputs[k]["on"]; off_v = metric_inputs[k]["off"]
+            status = "Positive" if r["mean"] > 0.01 else ("Negative" if r["mean"] < -0.01 else "Neutral")
+            rows.append({"Metric": m["label"], "On mean": f"{on_v:.3f}", "Off mean": f"{off_v:.3f}",
+                         "Net (on−off)": f"{on_v - off_v:+.3f}", "Sim mean": f"{r['mean']:+.3f}",
+                         "P10": f"{r['p10']:+.3f}", "P90": f"{r['p90']:+.3f}",
+                         "% Positive": f"{r['pos_pct']:.1f}%", "Status": status})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
