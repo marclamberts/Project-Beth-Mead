@@ -435,7 +435,8 @@ VIZZES = [
     {"id":"defensive",  "icon":"🛡","title":"Defensive Actions", "cat":"Defensive",  "desc":"Tackle, interception, clearance and block scatter map"},
     {"id":"sub_impact", "icon":"🔀","title":"Substitution Impact","cat":"Analysis",  "desc":"Monte Carlo simulation of player impact on/off the pitch — xG, xT, VAEP, EPV, G+, Goal Difference"},
     {"id":"xt_vaep",    "icon":"⚡","title":"xT & VAEP",          "cat":"Analysis",  "desc":"Expected Threat and VAEP scores computed from all WSL actions — season timelines and pitch heatmaps"},
-    {"id":"match_metrics","icon":"📋","title":"Match Metrics",    "cat":"Analysis",  "desc":"199 per-team metrics for any WSL match — passing, shooting, defending, sequences, set pieces and ratios"},
+    {"id":"match_metrics",  "icon":"📋","title":"Match Metrics",    "cat":"Analysis",  "desc":"199 per-team metrics for any WSL match — passing, shooting, defending, sequences, set pieces and ratios"},
+    {"id":"player_metrics","icon":"👤","title":"Player Metrics",   "cat":"Analysis",  "desc":"250 pure player metrics per match — passing, shooting, defending, dribbling, set pieces, goalkeeping and advanced ratios"},
 ]
 
 CAT_ORDER  = ["Passing","Attacking","Movement","Analysis","Comparison","Defensive"]
@@ -822,6 +823,14 @@ def _load_xt_vaep_actions():
     if not os.path.exists(fp):
         return pd.DataFrame()
     return pd.read_csv(fp, usecols=["season","player","team","action_type","timeMin","x","y","end_x","end_y","xt_value","vaep_value"])
+
+
+@st.cache_data
+def _load_player_metrics():
+    fp = os.path.join(os.path.dirname(__file__), "all_player_metrics.csv")
+    if not os.path.exists(fp):
+        return pd.DataFrame()
+    return pd.read_csv(fp, low_memory=False)
 
 
 # ── LANDING PAGE ──────────────────────────────────────────────────────────────
@@ -2618,3 +2627,97 @@ elif st.session_state.page == "match_metrics":
         _flat = _sel_rows.set_index("team")[all_metric_cols].T.reset_index()
         _flat.columns = ["Metric"] + list(_flat.columns[1:])
         st.dataframe(_flat, use_container_width=True, hide_index=True)
+
+# ── PLAYER METRICS PAGE ───────────────────────────────────────────────────────
+elif st.session_state.page == "player_metrics":
+    st.markdown("## 👤 Player Metrics")
+
+    _pm = _load_player_metrics()
+    if _pm.empty:
+        st.error("all_player_metrics.csv not found — run: python extract_player_metrics.py --all")
+        st.stop()
+
+    META_COLS = ["match_id", "date", "player", "team", "side"]
+    METRIC_COLS = [c for c in _pm.columns if c not in META_COLS]
+
+    CATEGORIES = {
+        "Passing":          [c for c in METRIC_COLS if c.startswith("pass") or c in ("deep_completions","key_passes","key_pass_rate_pct","through_balls","through_balls_successful","through_ball_accuracy_pct","crosses_total","crosses_successful","cross_accuracy_pct","crosses_left_channel","crosses_right_channel","free_kick_passes","throw_in_passes","throw_in_success_pct","counterattack_passes","avg_pass_start_x","cross_accuracy_rate")],
+        "Shooting":         [c for c in METRIC_COLS if c.startswith("shot") or c.startswith("goal") or c in ("xG_total","xG_per_shot","goals_minus_xG","xG_on_target","xG_open_play","xG_set_piece","shot_distance_avg_csv","avg_shot_angle","shots_assisted","shots_regular_play","big_chances","big_chances_scored","big_chances_missed","big_chance_conversion_pct","penalties_taken","penalties_scored","conversion_rate_pct")],
+        "Dribbling":        [c for c in METRIC_COLS if c.startswith("dribble") or c.startswith("dribb") or c in ("ball_touches","touches_own_third","touches_mid_third","touches_final_third","touches_in_box","carries_forward","carries_opp_half","progressive_actions")],
+        "Defending":        [c for c in METRIC_COLS if c.startswith("tackle") or c.startswith("interc") or c.startswith("clearance") or c.startswith("block") or c.startswith("aerial") or c.startswith("foul") or c in ("yellow_cards","red_cards","errors_leading_shot","errors_leading_goal","defensive_actions_total","def_actions_own_third","def_actions_mid_third","def_actions_final_third","pressures_opp_half","duels_total","duels_won","ball_recoveries","ball_recoveries_own_half","ball_recoveries_opp_half","tackle_interception_ratio")],
+        "Positioning":      [c for c in METRIC_COLS if c in ("total_actions","actions_own_third","actions_mid_third","actions_final_third","actions_own_half","actions_opp_half","avg_action_x","avg_action_y","actions_period1","actions_period2","first_action_minute","last_action_minute","minutes_active_proxy","actions_per_minute_active","counterattack_involvements","set_piece_involvements","counterattack_action_pct","set_piece_involvement_pct","opp_half_action_pct","territorial_dominance_index")],
+        "Set Pieces":       [c for c in METRIC_COLS if c.startswith("corner") or c.startswith("set_piece") or c.startswith("direct_free") or c.startswith("free_kick") or c.startswith("throw_in") or c.startswith("goal_kick") or c.startswith("penalty") or c in ("goals_from_corners","goals_from_free_kicks")],
+        "Goalkeeping":      [c for c in METRIC_COLS if c.startswith("gk_")],
+        "Advanced Ratios":  [c for c in METRIC_COLS if c in ("shot_on_target_per_pass","dribble_to_key_pass_ratio","aerial_contribution_index","defensive_load_index","attacking_contribution_index","shot_quality_index","pass_progression_index","pressing_contribution_pct","goal_involvement","xG_involvement","shots_on_target_per_shot","passes_per_action","duel_dominance_index","cross_accuracy_rate","tackle_interception_ratio","shots_per_touch","key_pass_per_touch","counterattack_action_pct","set_piece_involvement_pct","opp_half_action_pct")],
+    }
+
+    # ── filters ───────────────────────────────────────────────────────────────
+    _col1, _col2, _col3 = st.columns([2, 2, 2])
+    with _col1:
+        _seasons = sorted(_pm["match_id"].str[:4].unique(), reverse=True)
+        _sel_season = st.selectbox("Season start year", ["All"] + list(_seasons))
+    with _col2:
+        _teams = sorted(_pm["team"].dropna().unique())
+        _sel_team = st.selectbox("Team", ["All"] + _teams)
+    with _col3:
+        _players = sorted(_pm["player"].dropna().unique())
+        _sel_player = st.selectbox("Player", ["All"] + _players)
+
+    _filt = _pm.copy()
+    if _sel_season != "All":
+        _filt = _filt[_filt["match_id"].str.startswith(_sel_season)]
+    if _sel_team != "All":
+        _filt = _filt[_filt["team"] == _sel_team]
+    if _sel_player != "All":
+        _filt = _filt[_filt["player"] == _sel_player]
+
+    if _filt.empty:
+        st.warning("No data for the selected filters.")
+        st.stop()
+
+    # aggregate (sum for counts, mean for ratios/pct)
+    _num = _filt[META_COLS[:3] + METRIC_COLS].groupby("player")
+    _agg = _num[METRIC_COLS].sum().reset_index()
+    _agg_mean = _filt.groupby("player")[METRIC_COLS].mean().reset_index()
+    PCT_COLS = [c for c in METRIC_COLS if c.endswith("_pct") or c.endswith("_ratio") or c.endswith("_index") or "per_" in c or c.startswith("avg_") or c.endswith("_proxy")]
+    for col in PCT_COLS:
+        _agg[col] = _agg_mean[col]
+
+    st.markdown(f"**{len(_filt):,} player-match rows** · **{len(_agg)} unique players** · **250 metrics**")
+
+    # ── category tabs ─────────────────────────────────────────────────────────
+    _tabs = st.tabs(list(CATEGORIES.keys()))
+    for _tab, (_cat_name, _cat_cols) in zip(_tabs, CATEGORIES.items()):
+        with _tab:
+            _cat_cols = [c for c in _cat_cols if c in _agg.columns]
+            if not _cat_cols:
+                st.info("No metrics in this category.")
+                continue
+
+            _metric = st.selectbox(f"Metric — {_cat_name}", _cat_cols, key=f"pm_metric_{_cat_name}")
+            _top_n = st.slider("Top N players", 5, 30, 15, key=f"pm_topn_{_cat_name}")
+
+            _plot_df = _agg[["player", _metric]].dropna().sort_values(_metric, ascending=False).head(_top_n)
+
+            fig_pm, ax_pm = plt.subplots(figsize=(10, max(4, _top_n * 0.35)))
+            fig_pm.patch.set_facecolor("#07090f")
+            ax_pm.set_facecolor("#0d1117")
+            bars = ax_pm.barh(_plot_df["player"], _plot_df[_metric], color="#a78bfa")
+            ax_pm.invert_yaxis()
+            ax_pm.set_xlabel(_metric.replace("_", " ").title(), color="#9ca3af")
+            ax_pm.tick_params(colors="#9ca3af")
+            ax_pm.spines[:].set_color("#1f2937")
+            for bar in bars:
+                ax_pm.text(bar.get_width() + bar.get_width() * 0.01, bar.get_y() + bar.get_height() / 2,
+                           f"{bar.get_width():.2f}", va="center", ha="left", fontsize=8, color="#e8eaf0")
+            plt.tight_layout()
+            st.pyplot(fig_pm)
+            plt.close(fig_pm)
+
+            with st.expander(f"Full {_cat_name} table ({len(_cat_cols)} metrics)"):
+                _show = _agg[["player"] + _cat_cols].sort_values(_cat_cols[0], ascending=False)
+                st.dataframe(_show, use_container_width=True, hide_index=True)
+
+    # ── full table ────────────────────────────────────────────────────────────
+    with st.expander("Full table — all 250 metrics"):
+        st.dataframe(_agg.sort_values(METRIC_COLS[0], ascending=False), use_container_width=True, hide_index=True)
