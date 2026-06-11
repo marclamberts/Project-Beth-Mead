@@ -435,6 +435,7 @@ VIZZES = [
     {"id":"defensive",  "icon":"🛡","title":"Defensive Actions", "cat":"Defensive",  "desc":"Tackle, interception, clearance and block scatter map"},
     {"id":"sub_impact", "icon":"🔀","title":"Substitution Impact","cat":"Analysis",  "desc":"Monte Carlo simulation of player impact on/off the pitch — xG, xT, VAEP, EPV, G+, Goal Difference"},
     {"id":"xt_vaep",    "icon":"⚡","title":"xT & VAEP",          "cat":"Analysis",  "desc":"Expected Threat and VAEP scores computed from all WSL actions — season timelines and pitch heatmaps"},
+    {"id":"match_metrics","icon":"📋","title":"Match Metrics",    "cat":"Analysis",  "desc":"199 per-team metrics for any WSL match — passing, shooting, defending, sequences, set pieces and ratios"},
 ]
 
 CAT_ORDER  = ["Passing","Attacking","Movement","Analysis","Comparison","Defensive"]
@@ -797,6 +798,14 @@ def _load_xt_vaep_summary():
     if not os.path.exists(fp):
         return pd.DataFrame()
     return pd.read_csv(fp)
+
+
+@st.cache_data
+def _load_match_metrics():
+    fp = os.path.join(os.path.dirname(__file__), "all_match_metrics.csv")
+    if not os.path.exists(fp):
+        return pd.DataFrame()
+    return pd.read_csv(fp, low_memory=False)
 
 
 @st.cache_data
@@ -2437,3 +2446,175 @@ VAEP values actions by the change in scoring/conceding probability over a 3-acti
             ["player","team","n_actions","total_xt","xt_per_action","total_vaep","vaep_per90"]]
 
     st.dataframe(_lb_agg.round(4), use_container_width=True, hide_index=True)
+
+elif st.session_state.page == "match_metrics":
+    back_btn()
+    st.markdown("""
+<div style='margin-bottom:18px'>
+<span style='font-size:2rem;font-weight:900;color:#e8eaf0'>Match Metrics</span><br>
+<span style='color:#8b949e;font-size:.9rem'>199 per-team metrics for any WSL match across all seasons.</span>
+</div>""", unsafe_allow_html=True)
+
+    _mm = _load_match_metrics()
+    if _mm.empty:
+        st.error("all_match_metrics.csv not found — run: python extract_match_metrics.py --all")
+        st.stop()
+
+    # ── selectors ────────────────────────────────────────────────────────────
+    mm_c1, mm_c2 = st.columns([1, 2])
+    with mm_c1:
+        _mm_seasons = sorted(_mm["match_id"].str.extract(r'^(\d{4}-\d{2}-\d{2})')[0].dropna().str[:4].unique().tolist(), reverse=True)
+        _mm_season_sel = st.selectbox("Season (year)", _mm_seasons)
+    with mm_c2:
+        _mm_season_mask = _mm["match_id"].str.startswith(_mm_season_sel)
+        _mm_matches = sorted(_mm[_mm_season_mask]["match_id"].unique().tolist())
+        _mm_match_labels = [m.replace("_"," — ",1).replace("-"," ",2) for m in _mm_matches]
+        _mm_idx = st.selectbox("Match", range(len(_mm_matches)), format_func=lambda i: _mm_matches[i].split("_",1)[1].replace(" - "," vs ") if "_" in _mm_matches[i] else _mm_matches[i])
+
+    _sel_match = _mm_matches[_mm_idx]
+    _sel_rows  = _mm[_mm["match_id"] == _sel_match].copy()
+
+    if _sel_rows.empty:
+        st.warning("No data for this match.")
+        st.stop()
+
+    # ── metric categories ─────────────────────────────────────────────────────
+    _CATS = {
+        "Passing":     [c for c in _sel_rows.columns if any(c.startswith(p) for p in
+                        ("passes_","pass_","crosses","through_","free_kick_pass","throw_in_pass",
+                         "counterattack_pass","assists","deep_","key_pass"))],
+        "Shooting":    [c for c in _sel_rows.columns if any(c.startswith(p) for p in
+                        ("shots_","goals","shot_","conversion_","big_chance","penalty","penalties",
+                         "avg_shot","first_shot","first_goal"))],
+        "Defending":   [c for c in _sel_rows.columns if any(c.startswith(p) for p in
+                        ("tackles","interception","clearance","block","aerial","fouls","yellow_card",
+                         "red_card","gk_save","def_action","errors_","offsides","opp_shot","opp_goal","opp_on_target"))],
+        "Possession":  [c for c in _sel_rows.columns if any(c.startswith(p) for p in
+                        ("dribble","ball_","total_actions","possession","actions_","opp_half","ppda"))],
+        "Sequences":   [c for c in _sel_rows.columns if c.startswith("seq") or c.startswith("sequence") or c=="passes_per_sequence"],
+        "Set Pieces":  [c for c in _sel_rows.columns if any(c.startswith(p) for p in
+                        ("corners","free_kicks","throw_ins","goal_kick","direct_free","set_piece",
+                         "goals_from_corner","goals_from_free","shots_from_set","gk_throw","gk_distrib","penalties_scored","penalties_conceded"))],
+        "Top Players": [c for c in _sel_rows.columns if c.startswith("top_")],
+        "Result":      [c for c in _sel_rows.columns if any(c.startswith(p) for p in
+                        ("result","goals_scored","goals_conceded","ht_","goal_difference","clean_","came_","threw_",
+                         "shots_ratio","on_target_ratio","unique_players","substitutions"))],
+        "Ratios":      [c for c in _sel_rows.columns if any(c.startswith(p) for p in
+                        ("shots_per","progressive_pass","passes_into_box_pct","pass_into_ft","def_vs",
+                         "recovery_rate","attack_third","pressure_index","shot_quality","box_entry",
+                         "shot_conversion","cross_to","long_pass_accuracy","dribble_to","aerial_dominance",
+                         "actions_per_minute","shot_dominance"))],
+        "Match Meta":  [c for c in _sel_rows.columns if c.startswith("match_") or c.startswith("period")],
+    }
+    # dedup
+    _seen = set()
+    for cat in _CATS:
+        _CATS[cat] = [c for c in _CATS[cat] if c not in _seen and not _seen.add(c)]
+
+    # ── header score card ─────────────────────────────────────────────────────
+    _teams = _sel_rows["team"].tolist()
+    _row_h = _sel_rows[_sel_rows["side"]=="home"].iloc[0] if "home" in _sel_rows["side"].values else _sel_rows.iloc[0]
+    _row_a = _sel_rows[_sel_rows["side"]=="away"].iloc[0] if "away" in _sel_rows["side"].values else _sel_rows.iloc[1]
+
+    st.markdown(f"""
+<div style='background:#161b22;border-radius:14px;padding:24px;text-align:center;margin-bottom:20px'>
+  <div style='display:flex;justify-content:space-between;align-items:center'>
+    <div style='font-size:1.3rem;font-weight:800;color:#e8eaf0;flex:1;text-align:left'>{_row_h.get('team','Home')}</div>
+    <div style='font-size:2.8rem;font-weight:900;color:#3b82f6;padding:0 32px'>
+      {int(_row_h.get('goals_scored',0))} – {int(_row_a.get('goals_scored',0))}
+    </div>
+    <div style='font-size:1.3rem;font-weight:800;color:#e8eaf0;flex:1;text-align:right'>{_row_a.get('team','Away')}</div>
+  </div>
+  <div style='color:#484f58;font-size:.8rem;margin-top:8px'>{_sel_match.split("_")[0] if "_" in _sel_match else ""} · HT {int(_row_h.get('ht_goals_scored',0))}–{int(_row_a.get('ht_goals_scored',0))}</div>
+</div>""", unsafe_allow_html=True)
+
+    # ── key metrics comparison bar ─────────────────────────────────────────────
+    _KEY_METRICS = [
+        ("Possession %","possession_pct","#3b82f6"),
+        ("Shots","shots_total","#f59e0b"),
+        ("Shots on target","shots_on_target","#10b981"),
+        ("Pass accuracy %","pass_accuracy_pct","#a78bfa"),
+        ("Passes","passes_total","#f97316"),
+        ("Tackles won","tackles_won","#ef4444"),
+        ("Big chances","big_chances","#fcd34d"),
+        ("PPDA","ppda","#6ee7b7"),
+    ]
+    _n_key = len(_KEY_METRICS)
+    fig_key, axes_key = plt.subplots(1, _n_key, figsize=(18, 2.8))
+    fig_key.patch.set_facecolor(FIG_BG)
+    hn, an = _row_h.get('team','Home'), _row_a.get('team','Away')
+    for i, (lbl, col, clr) in enumerate(_KEY_METRICS):
+        ax = axes_key[i]; ax.set_facecolor("#161b22")
+        hv = float(_row_h.get(col, 0) or 0)
+        av = float(_row_a.get(col, 0) or 0)
+        total = hv + av or 1
+        ax.barh([1,0], [hv/total*100, av/total*100], color=[clr,"#30363d"], height=0.5, edgecolor="none")
+        ax.set_xlim(0,100); ax.set_yticks([0,1])
+        ax.set_yticklabels([an[:12], hn[:12]], color="#8b949e", fontsize=7)
+        ax.set_title(lbl, color="#e8eaf0", fontsize=8, fontweight="700", pad=6)
+        ax.text(hv/total*100+1, 1, f"{hv:g}", va='center', ha='left', color=clr,  fontsize=8, fontweight="800")
+        ax.text(av/total*100+1, 0, f"{av:g}", va='center', ha='left', color="#8b949e", fontsize=8)
+        ax.tick_params(left=False, bottom=False, labelbottom=False)
+        for sp in ax.spines.values(): sp.set_visible(False)
+    plt.tight_layout()
+    st.pyplot(fig_key, use_container_width=True)
+    plt.close(fig_key)
+
+    st.markdown("---")
+
+    # ── category tabs ─────────────────────────────────────────────────────────
+    _tab_names = [k for k, v in _CATS.items() if v]
+    _tabs = st.tabs(_tab_names)
+
+    _CAT_COLORS = {"Passing":"#3b82f6","Shooting":"#f59e0b","Defending":"#ef4444",
+                   "Possession":"#10b981","Sequences":"#a78bfa","Set Pieces":"#f97316",
+                   "Top Players":"#fcd34d","Result":"#6ee7b7","Ratios":"#818cf8","Match Meta":"#6b7280"}
+
+    for tab, cat_name in zip(_tabs, _tab_names):
+        cols_in_cat = _CATS[cat_name]
+        clr = _CAT_COLORS.get(cat_name, C_BLUE)
+        with tab:
+            # numeric columns → bar chart
+            num_cols = [c for c in cols_in_cat if pd.api.types.is_numeric_dtype(_sel_rows[c])]
+            str_cols = [c for c in cols_in_cat if c not in num_cols]
+
+            if num_cols:
+                # bar chart: side-by-side grouped
+                _n = len(num_cols)
+                _ncols = min(_n, 6)
+                _nrows = math.ceil(_n / _ncols)
+                fig_c, axes_c = plt.subplots(_nrows, _ncols, figsize=(min(18, _ncols*3), _nrows*2.8))
+                fig_c.patch.set_facecolor(FIG_BG)
+                axes_flat = np.array(axes_c).flatten() if _n > 1 else [axes_c]
+                for j, col in enumerate(num_cols):
+                    ax = axes_flat[j]; ax.set_facecolor("#161b22")
+                    hv = float(_row_h.get(col, 0) or 0)
+                    av = float(_row_a.get(col, 0) or 0)
+                    bars = ax.bar([hn[:10], an[:10]], [hv, av], color=[clr,"#484f58"], edgecolor="none", width=0.5)
+                    for b, v in zip(bars, [hv, av]):
+                        ax.text(b.get_x()+b.get_width()/2, b.get_height()+max(hv,av,0.01)*0.04,
+                                f"{v:g}", ha='center', va='bottom', color="#e8eaf0", fontsize=8, fontweight="700")
+                    ax.set_title(col.replace("_"," "), color="#8b949e", fontsize=7.5, pad=4)
+                    ax.tick_params(colors="#484f58", labelsize=7)
+                    for sp in ax.spines.values(): sp.set_visible(False)
+                    ax.set_facecolor("#161b22")
+                for j in range(len(num_cols), len(axes_flat)):
+                    axes_flat[j].set_visible(False)
+                plt.tight_layout()
+                st.pyplot(fig_c, use_container_width=True)
+                plt.close(fig_c)
+
+            # string columns as table
+            if str_cols:
+                _str_data = {c: [_row_h.get(c,''), _row_a.get(c,'')] for c in str_cols}
+                _str_df = pd.DataFrame(_str_data, index=[hn, an]).T
+                st.dataframe(_str_df, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── full flat table ───────────────────────────────────────────────────────
+    with st.expander("Full metrics table (all 199)"):
+        all_metric_cols = [c for c in _sel_rows.columns if c not in ("match_id","date","side")]
+        _flat = _sel_rows.set_index("team")[all_metric_cols].T.reset_index()
+        _flat.columns = ["Metric"] + list(_flat.columns[1:])
+        st.dataframe(_flat, use_container_width=True, hide_index=True)
