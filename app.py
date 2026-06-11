@@ -434,6 +434,7 @@ VIZZES = [
     {"id":"archetypes", "icon":"🧬","title":"Archetypes",        "cat":"Comparison", "desc":"Six forward archetypes scored per season with radar and matrix"},
     {"id":"defensive",  "icon":"🛡","title":"Defensive Actions", "cat":"Defensive",  "desc":"Tackle, interception, clearance and block scatter map"},
     {"id":"sub_impact", "icon":"🔀","title":"Substitution Impact","cat":"Analysis",  "desc":"Monte Carlo simulation of player impact on/off the pitch — xG, xT, VAEP, EPV, G+, Goal Difference"},
+    {"id":"xt_vaep",    "icon":"⚡","title":"xT & VAEP",          "cat":"Analysis",  "desc":"Expected Threat and VAEP scores computed from all WSL actions — season timelines and pitch heatmaps"},
 ]
 
 CAT_ORDER  = ["Passing","Attacking","Movement","Analysis","Comparison","Defensive"]
@@ -788,6 +789,22 @@ def _pct(arr):
         ["p10","p25","p50","p75","p90","mean","pos_pct"],
         [np.percentile(arr,10), np.percentile(arr,25), np.percentile(arr,50),
          np.percentile(arr,75), np.percentile(arr,90), np.mean(arr), np.mean(arr>0)*100])}
+
+
+@st.cache_data
+def _load_xt_vaep_summary():
+    fp = os.path.join(os.path.dirname(__file__), "player_vaep_xt_summary.csv")
+    if not os.path.exists(fp):
+        return pd.DataFrame()
+    return pd.read_csv(fp)
+
+
+@st.cache_data
+def _load_xt_vaep_actions():
+    fp = os.path.join(os.path.dirname(__file__), "vaep_xt_results.csv")
+    if not os.path.exists(fp):
+        return pd.DataFrame()
+    return pd.read_csv(fp, usecols=["season","player","team","action_type","timeMin","x","y","end_x","end_y","xt_value","vaep_value"])
 
 
 # ── LANDING PAGE ──────────────────────────────────────────────────────────────
@@ -2088,11 +2105,27 @@ Configure per-metric means from your data, then run the simulator.
         {"key": "gd",    "label": "Goal Diff Added",  "type": "normal",  "weight": 2.0, "color": "#ef4444"},
     ]
 
-    _gplus_default = round((player_goals_on - player_xg_on), 3) if (selected_player if 'selected_player' in dir() else None) and selected_player != "(manual entry)" else 0.01
+    # pull real xT / VAEP from computed summary if player is selected
+    _xt_vaep_sum = _load_xt_vaep_summary()
+    _has_player = (selected_player if 'selected_player' in dir() else None) and selected_player != "(manual entry)"
+    _player_xt_on  = 0.12
+    _player_vaep_on = 0.08
+    if _has_player and not _xt_vaep_sum.empty:
+        _prow = _xt_vaep_sum[_xt_vaep_sum["player"] == selected_player]
+        if not _prow.empty:
+            _player_xt_on   = float(_prow["xt_per_action"].mean())
+            _player_vaep_on = float(_prow["vaep_per_action"].mean())
+            st.markdown(
+                f"<span style='color:#8b949e;font-size:.8rem'>"
+                f"From xT/VAEP model — xT/action: <b style='color:#10b981'>{_player_xt_on:.4f}</b> · "
+                f"VAEP/action: <b style='color:#a78bfa'>{_player_vaep_on:.4f}</b></span>",
+                unsafe_allow_html=True)
+
+    _gplus_default = round((player_goals_on - player_xg_on), 3) if _has_player else 0.01
     _defaults = {
         "xg":    (round(player_xg_on, 3), 0.05),
-        "xt":    (0.12, 0.04),
-        "vaep":  (0.08, 0.03),
+        "xt":    (round(_player_xt_on, 4),   0.04),
+        "vaep":  (round(_player_vaep_on, 4), 0.03),
         "epv":   (0.10, 0.03),
         "gplus": (_gplus_default, 0.05),
         "gd":    (0.15, 0.08),
@@ -2212,3 +2245,147 @@ Configure per-metric means from your data, then run the simulator.
                          "% Positive": f"{r['pos_pct']:.1f}%", "Status": status})
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+elif st.session_state.page == "xt_vaep":
+    back_btn()
+    st.markdown("""
+<div style='margin-bottom:24px'>
+<span style='font-size:2rem;font-weight:900;color:#e8eaf0'>xT &amp; VAEP</span><br>
+<span style='color:#8b949e;font-size:.95rem'>
+Expected Threat (xT) and VAEP computed from all 1,243 WSL match files.
+xT measures how much each action increases the probability of scoring;
+VAEP values actions by the change in scoring/conceding probability over a 3-action context window.
+</span>
+</div>
+""", unsafe_allow_html=True)
+
+    _summary = _load_xt_vaep_summary()
+    _actions = _load_xt_vaep_actions()
+
+    if _summary.empty:
+        st.error("player_vaep_xt_summary.csv not found — run compute_vaep_xt.py first.")
+        st.stop()
+
+    # ── controls ─────────────────────────────────────────────────────────────
+    tv1, tv2, tv3 = st.columns([2, 1, 1])
+    with tv1:
+        _all_players = sorted(_summary["player"].dropna().unique().tolist())
+        _sel_player  = st.selectbox("Player", _all_players,
+                                    index=_all_players.index("B. Mead") if "B. Mead" in _all_players else 0)
+    with tv2:
+        _metric_choice = st.selectbox("Primary metric", ["xT", "VAEP"])
+    with tv3:
+        _norm_choice = st.selectbox("Normalisation", ["Total", "Per action", "Per 90"])
+
+    _pm = _summary[_summary["player"] == _sel_player].copy()
+    _pm = _pm.sort_values("season")
+
+    # ── season timeline ───────────────────────────────────────────────────────
+    if not _pm.empty:
+        _col_map = {
+            ("xT",  "Total"):      "total_xt",
+            ("xT",  "Per action"): "xt_per_action",
+            ("xT",  "Per 90"):     "total_xt",   # will divide by estimated mins
+            ("VAEP","Total"):      "total_vaep",
+            ("VAEP","Per action"): "vaep_per_action",
+            ("VAEP","Per 90"):     "vaep_per90",
+        }
+        _ycol = _col_map[(_metric_choice, _norm_choice)]
+        _yvals = _pm[_ycol].values
+        _seasons_lbl = [s.replace("WSL_","WSL ") for s in _pm["season"].values]
+        _mcolor = "#3b82f6" if _metric_choice == "xT" else "#a78bfa"
+
+        fig_t, ax_t = plt.subplots(figsize=(12, 3.8))
+        fig_t.patch.set_facecolor(FIG_BG); ax_t.set_facecolor("#161b22")
+        x_pos = np.arange(len(_seasons_lbl))
+        _bars = ax_t.bar(x_pos, _yvals, color=_mcolor, alpha=0.8, edgecolor="none", width=0.6)
+        for bar, v in zip(_bars, _yvals):
+            ax_t.text(bar.get_x() + bar.get_width()/2, bar.get_height() + (max(_yvals)*0.02 if max(_yvals)>0 else 0.01),
+                      f"{v:.2f}", ha="center", va="bottom", color="#e8eaf0", fontsize=8, fontweight="700")
+        ax_t.set_xticks(x_pos); ax_t.set_xticklabels(_seasons_lbl, rotation=35, ha="right", color="#8b949e", fontsize=8)
+        ax_t.axhline(0, color="#484f58", linewidth=0.8, linestyle="--")
+        ax_t.set_title(f"{_sel_player} — {_metric_choice} ({_norm_choice}) by season",
+                       color="#e8eaf0", fontsize=11, fontweight="800", pad=10)
+        ax_t.set_ylabel(f"{_metric_choice} ({_norm_choice})", color="#484f58", fontsize=9)
+        ax_t.tick_params(colors="#484f58", labelsize=8)
+        for sp in ax_t.spines.values(): sp.set_visible(False)
+        plt.tight_layout(); st.pyplot(fig_t, use_container_width=True); plt.close(fig_t)
+
+        # season summary cards
+        best_s = _pm.loc[_pm[_ycol].idxmax(), "season"].replace("WSL_","WSL ")
+        career_tot_xt   = _pm["total_xt"].sum()
+        career_tot_vaep = _pm["total_vaep"].sum()
+        career_acts     = _pm["n_actions"].sum()
+        cc1, cc2, cc3, cc4 = st.columns(4)
+        def _xcard(col, lbl, val, fmt, clr):
+            col.markdown(
+                f"<div style='background:#161b22;border-radius:10px;padding:14px 18px;text-align:center'>"
+                f"<div style='color:#8b949e;font-size:.75rem;margin-bottom:4px'>{lbl}</div>"
+                f"<div style='color:{clr};font-size:1.5rem;font-weight:900'>{fmt.format(val)}</div>"
+                f"</div>", unsafe_allow_html=True)
+        _xcard(cc1, "Career total xT",   career_tot_xt,   "{:.2f}",  "#3b82f6")
+        _xcard(cc2, "Career total VAEP", career_tot_vaep, "{:+.2f}", "#a78bfa")
+        _xcard(cc3, "Total actions",     career_acts,     "{:,}",    "#f59e0b")
+        _xcard(cc4, f"Best season ({_metric_choice})", _pm[_ycol].max(), "{:.3f}", _mcolor)
+
+    st.markdown("---")
+
+    # ── pitch heatmap of xT-generating actions ────────────────────────────────
+    st.markdown("### xT action heatmap")
+    if not _actions.empty:
+        _hm_seasons = sorted(_summary["season"].unique().tolist())
+        _hm_sel = st.multiselect("Seasons", [s.replace("WSL_","WSL ") for s in _hm_seasons],
+                                 default=[s.replace("WSL_","WSL ") for s in _hm_seasons[-2:]])
+        _hm_sel_raw = [s.replace("WSL ","WSL_") for s in _hm_sel]
+
+        _pa = _actions[
+            (_actions["player"] == _sel_player) &
+            (_actions["season"].isin(_hm_sel_raw)) &
+            (_actions["xt_value"] > 0)
+        ].copy()
+
+        if len(_pa) > 0:
+            _pitch = Pitch(pitch_type="opta", pitch_color="#161b22", line_color="#30363d")
+            fig_h, ax_h = _pitch.draw(figsize=(12, 7))
+            fig_h.patch.set_facecolor(FIG_BG)
+            _pitch.kdeplot(_pa["x"], _pa["y"], ax=ax_h, cmap="Blues",
+                           fill=True, levels=100, alpha=0.7, thresh=0.05)
+            sc = ax_h.scatter(_pa["x"], _pa["y"], c=_pa["xt_value"],
+                              cmap="YlOrRd", s=18, alpha=0.6, edgecolors="none",
+                              vmin=0, vmax=_pa["xt_value"].quantile(0.95))
+            plt.colorbar(sc, ax=ax_h, label="xT value", shrink=0.6)
+            ax_h.set_title(f"{_sel_player} — positive xT actions ({', '.join(_hm_sel)})",
+                           color="#e8eaf0", fontsize=11, fontweight="800", pad=10)
+            plt.tight_layout(); st.pyplot(fig_h, use_container_width=True); plt.close(fig_h)
+        else:
+            st.info("No positive-xT actions found for this player/season selection.")
+
+    st.markdown("---")
+
+    # ── league-wide leaderboard ───────────────────────────────────────────────
+    st.markdown("### League leaderboard")
+    lb1, lb2, lb3 = st.columns([1, 1, 1])
+    with lb1:
+        _lb_metric = st.selectbox("Metric", ["total_xt","xt_per_action","total_vaep","vaep_per90","vaep_per_action"], key="lb_metric")
+    with lb2:
+        _lb_season = st.selectbox("Season", ["All seasons"] + [s.replace("WSL_","WSL ") for s in sorted(_summary["season"].unique())], key="lb_season")
+    with lb3:
+        _lb_min = st.number_input("Min actions", value=300, step=50, key="lb_min")
+
+    _lb_df = _summary.copy()
+    if _lb_season != "All seasons":
+        _lb_df = _lb_df[_lb_df["season"] == _lb_season.replace("WSL ","WSL_")]
+        _lb_agg = _lb_df[_lb_df["n_actions"] >= _lb_min].nlargest(20, _lb_metric)[
+            ["player","team","season","n_actions","total_xt","xt_per_action","total_vaep","vaep_per90"]]
+    else:
+        _lb_agg = _lb_df.groupby(["player","team"]).agg(
+            n_actions=("n_actions","sum"),
+            total_xt=("total_xt","sum"),
+            total_vaep=("total_vaep","sum"),
+        ).reset_index()
+        _lb_agg["xt_per_action"]  = _lb_agg["total_xt"]   / _lb_agg["n_actions"]
+        _lb_agg["vaep_per_action"]= _lb_agg["total_vaep"]  / _lb_agg["n_actions"]
+        _lb_agg["vaep_per90"]     = _lb_agg["vaep_per_action"] * 90
+        _lb_agg = _lb_agg[_lb_agg["n_actions"] >= _lb_min].nlargest(20, _lb_metric)[
+            ["player","team","n_actions","total_xt","xt_per_action","total_vaep","vaep_per90"]]
+
+    st.dataframe(_lb_agg.round(4), use_container_width=True, hide_index=True)
