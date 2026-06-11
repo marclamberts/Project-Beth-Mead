@@ -248,6 +248,8 @@ xg_model, xg_p, xg_fpr, xg_tpr, xg_auc, xg_brier = train_model(
 nonpen['xg'] = xg_model.predict_proba(X_base)[:, 1]
 shots.loc[~pen_mask, 'xg'] = nonpen['xg'].values
 shots.loc[pen_mask,  'xg'] = float(pen_xg)
+joblib.dump(xg_model, os.path.join(OUTPUT_DIR, 'model_xg.pkl'))
+joblib.dump({'features': XG_FEATURES, 'pen_xg': pen_xg}, os.path.join(OUTPUT_DIR, 'model_meta.pkl'))
 
 print('\n── Model 2: Post-Shot psxG ──')
 has_pl = nonpen[['goal_y_norm','goal_h_norm']].notna().any(axis=1)
@@ -267,6 +269,8 @@ nonpen['psxg'] = nonpen['xg'].copy()
 nonpen.loc[has_pl,'psxg'] = psxg_model.predict_proba(X_all_ps[has_pl])[:,1]
 shots.loc[~pen_mask,'psxg'] = nonpen['psxg'].values
 shots.loc[pen_mask, 'psxg'] = float(pen_xg)
+joblib.dump(psxg_model, os.path.join(OUTPUT_DIR, 'model_psxg.pkl'))
+joblib.dump({'features': PSXG_FEATURES}, os.path.join(OUTPUT_DIR, 'model_psxg_meta.pkl'))
 
 print('\n── Derived metrics ──')
 shots['placement_quality'] = shots['psxg'] - shots['xg']
