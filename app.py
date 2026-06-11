@@ -800,6 +800,14 @@ def _load_xt_vaep_summary():
 
 
 @st.cache_data
+def _load_onoff():
+    fp = os.path.join(os.path.dirname(__file__), "player_onoff_xt_vaep.csv")
+    if not os.path.exists(fp):
+        return pd.DataFrame()
+    return pd.read_csv(fp)
+
+
+@st.cache_data
 def _load_xt_vaep_actions():
     fp = os.path.join(os.path.dirname(__file__), "vaep_xt_results.csv")
     if not os.path.exists(fp):
@@ -2091,10 +2099,64 @@ Configure per-metric means from your data, then run the simulator.
             player_xg_on = 0.0
             player_goals_on = 0.0
 
+    # ── on/off real data from computed CSV ──────────────────────────────────────
+    _onoff_df = _load_onoff()
+    _has_player = (selected_player if 'selected_player' in dir() else None) and selected_player != "(manual entry)"
+
+    _xt_on_pm   = 0.020;  _xt_off_pm   = 0.010
+    _vaep_on_pm = 0.001;  _vaep_off_pm = 0.001
+    _n_onoff_matches = 0
+
+    if _has_player and not _onoff_df.empty:
+        _poo = _onoff_df[_onoff_df["player"] == selected_player].copy()
+        if role_filter == "Starter":
+            _poo = _poo[_poo["role"] == "starter"]
+        elif role_filter == "Substitute":
+            _poo = _poo[_poo["role"] == "substitute"]
+        if not _poo.empty:
+            _n_onoff_matches = len(_poo)
+            _xt_on_pm   = float(_poo["on_xt_per_min"].mean())
+            _xt_off_pm  = float(_poo["off_xt_per_min"].mean())
+            _vaep_on_pm = float(_poo["on_vaep_per_min"].mean())
+            _vaep_off_pm= float(_poo["off_vaep_per_min"].mean())
+            _xt_diff    = _xt_on_pm - _xt_off_pm
+            _vaep_diff  = _vaep_on_pm - _vaep_off_pm
+
+            # On/off summary chart
+            st.markdown("### On / Off pitch impact (from match data)")
+            _oo_fig, _oo_axes = plt.subplots(1, 2, figsize=(10, 3))
+            _oo_fig.patch.set_facecolor(FIG_BG)
+            for _ax, (vals, lbls, title, colors) in zip(_oo_axes, [
+                ([_xt_on_pm, _xt_off_pm], ["On", "Off"], "xT per minute", [C_GREEN, "#30363d"]),
+                ([_vaep_on_pm, _vaep_off_pm], ["On", "Off"], "VAEP per minute", ["#a78bfa", "#30363d"]),
+            ]):
+                _ax.set_facecolor("#161b22")
+                _bars = _ax.bar(lbls, vals, color=colors, edgecolor="none", width=0.5)
+                for b, v in zip(_bars, vals):
+                    _ax.text(b.get_x() + b.get_width()/2, b.get_height() + max(vals)*0.03,
+                             f"{v:.4f}", ha="center", va="bottom", color="#e8eaf0", fontsize=9, fontweight="700")
+                _ax.set_title(title, color="#e8eaf0", fontsize=10, fontweight="800")
+                _ax.tick_params(colors="#8b949e", labelsize=9)
+                for sp in _ax.spines.values(): sp.set_visible(False)
+                _ax.set_facecolor("#161b22")
+            _oo_fig.suptitle(
+                f"{selected_player} · {_n_onoff_matches} matches · {role_filter}",
+                color="#8b949e", fontsize=9, y=1.01)
+            plt.tight_layout()
+            st.pyplot(_oo_fig, use_container_width=True)
+            plt.close(_oo_fig)
+
+            st.markdown(
+                f"<span style='color:#8b949e;font-size:.8rem'>"
+                f"xT diff (on−off): <b style='color:#10b981'>{_xt_diff:+.4f}</b>/min · "
+                f"VAEP diff: <b style='color:#a78bfa'>{_vaep_diff:+.5f}</b>/min · "
+                f"Matches: <b style='color:#e8eaf0'>{_n_onoff_matches}</b>"
+                f"</span>", unsafe_allow_html=True)
+
     st.markdown("---")
-    st.markdown("### Metric inputs (per 90 min averages)")
-    st.markdown("<span style='color:#8b949e;font-size:.85rem'>Enter player mean values when ON and OFF the pitch. "
-                "Off-pitch defaults to 70% of on-pitch as a starting point.</span>", unsafe_allow_html=True)
+    st.markdown("### Metric inputs (per minute averages)")
+    st.markdown("<span style='color:#8b949e;font-size:.85rem'>On/off values pre-filled from the computed xT &amp; VAEP model. "
+                "Edit any field then run the simulation.</span>", unsafe_allow_html=True)
 
     _METRICS = [
         {"key": "xg",    "label": "xG",              "type": "poisson", "weight": 2.0, "color": "#3b82f6"},
@@ -2105,27 +2167,11 @@ Configure per-metric means from your data, then run the simulator.
         {"key": "gd",    "label": "Goal Diff Added",  "type": "normal",  "weight": 2.0, "color": "#ef4444"},
     ]
 
-    # pull real xT / VAEP from computed summary if player is selected
-    _xt_vaep_sum = _load_xt_vaep_summary()
-    _has_player = (selected_player if 'selected_player' in dir() else None) and selected_player != "(manual entry)"
-    _player_xt_on  = 0.12
-    _player_vaep_on = 0.08
-    if _has_player and not _xt_vaep_sum.empty:
-        _prow = _xt_vaep_sum[_xt_vaep_sum["player"] == selected_player]
-        if not _prow.empty:
-            _player_xt_on   = float(_prow["xt_per_action"].mean())
-            _player_vaep_on = float(_prow["vaep_per_action"].mean())
-            st.markdown(
-                f"<span style='color:#8b949e;font-size:.8rem'>"
-                f"From xT/VAEP model — xT/action: <b style='color:#10b981'>{_player_xt_on:.4f}</b> · "
-                f"VAEP/action: <b style='color:#a78bfa'>{_player_vaep_on:.4f}</b></span>",
-                unsafe_allow_html=True)
-
     _gplus_default = round((player_goals_on - player_xg_on), 3) if _has_player else 0.01
     _defaults = {
         "xg":    (round(player_xg_on, 3), 0.05),
-        "xt":    (round(_player_xt_on, 4),   0.04),
-        "vaep":  (round(_player_vaep_on, 4), 0.03),
+        "xt":    (round(_xt_on_pm, 5),   round(abs(_xt_on_pm) * 0.3, 5)),
+        "vaep":  (round(_vaep_on_pm, 5), round(abs(_vaep_on_pm) * 0.3, 5)),
         "epv":   (0.10, 0.03),
         "gplus": (_gplus_default, 0.05),
         "gd":    (0.15, 0.08),
@@ -2141,8 +2187,10 @@ Configure per-metric means from your data, then run the simulator.
         on_def, sig_def = _defaults.get(k, (0.10, 0.05))
         mcols = st.columns([2, 1.5, 1.5, 1.5, 1.5, 1])
         mcols[0].markdown(f"<span style='color:{m['color']};font-weight:700'>{m['label']}</span>", unsafe_allow_html=True)
-        on_mean  = mcols[1].number_input("", value=float(on_def),        step=0.01,  key=f"on_{k}",  label_visibility="collapsed", format="%.3f")
-        off_mean = mcols[2].number_input("", value=float(on_def * 0.7),  step=0.01,  key=f"off_{k}", label_visibility="collapsed", format="%.3f")
+        # use real off-pitch value for xt/vaep, else 70% fallback
+        off_real = {"xt": round(_xt_off_pm, 5), "vaep": round(_vaep_off_pm, 5)}.get(k, on_def * 0.7)
+        on_mean  = mcols[1].number_input("", value=float(on_def),   step=0.001, key=f"on_{k}",  label_visibility="collapsed", format="%.4f")
+        off_mean = mcols[2].number_input("", value=float(off_real), step=0.001, key=f"off_{k}", label_visibility="collapsed", format="%.4f")
         sig_on   = mcols[3].number_input("", value=float(sig_def),       step=0.005, key=f"son_{k}", label_visibility="collapsed", format="%.3f")
         sig_off  = mcols[4].number_input("", value=float(sig_def),       step=0.005, key=f"sof_{k}", label_visibility="collapsed", format="%.3f")
         weight   = mcols[5].number_input("", value=m["weight"], step=0.5, min_value=0.0, max_value=5.0, key=f"w_{k}", label_visibility="collapsed", format="%.1f")

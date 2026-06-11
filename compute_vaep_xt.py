@@ -18,8 +18,9 @@ warnings.filterwarnings('ignore')
 # Configuration
 # ---------------------------------------------------------------------------
 DATA_ROOT = "/home/user/Project-Beth-Mead"
-OUTPUT_CSV = os.path.join(DATA_ROOT, "vaep_xt_results.csv")
-SUMMARY_CSV = os.path.join(DATA_ROOT, "player_vaep_xt_summary.csv")
+OUTPUT_CSV   = os.path.join(DATA_ROOT, "vaep_xt_results.csv")
+SUMMARY_CSV  = os.path.join(DATA_ROOT, "player_vaep_xt_summary.csv")
+ONOFF_CSV    = os.path.join(DATA_ROOT, "player_onoff_xt_vaep.csv")
 
 # xT grid
 XT_COLS = 16   # x-axis (0-100)
@@ -481,7 +482,111 @@ def main():
     )
     print(vaep_top.to_string(index=False))
 
+    # On/off pitch analysis
+    print("\nBuilding on/off pitch xT & VAEP table...")
+    df_onoff = compute_onoff(df)
+    df_onoff.to_csv(ONOFF_CSV, index=False)
+    print(f"  Written: {ONOFF_CSV}  ({len(df_onoff):,} rows)")
+
+    # Top on/off differential
+    print("\n" + "=" * 60)
+    print("TOP 10 PLAYERS BY xT ON/OFF DIFFERENTIAL (min 5 matches)")
+    print("=" * 60)
+    top_xt = (df_onoff.groupby('player')
+              .agg(n_matches=('match_id','count'),
+                   xt_diff_mean=('xt_on_per_min','mean'))
+              .query('n_matches >= 5')
+              .assign(xt_on_off_diff=lambda d: d['xt_diff_mean'])
+              .sort_values('xt_on_off_diff', ascending=False)
+              .head(10))
+    print(top_xt.to_string())
+
     print("\nDone.")
+
+
+def compute_onoff(df):
+    """
+    For each player × match, split the team's xT/VAEP into
+    on-pitch vs off-pitch windows using first/last action minute as a proxy.
+    Returns one row per player × match with on/off metrics.
+    """
+    rows = []
+    team_col = 'contestantId'
+
+    # pre-group team actions per match
+    match_team_groups = {}
+    for (mid, cid), grp in df.groupby(['match_id', team_col], sort=False):
+        match_team_groups[(mid, cid)] = grp
+
+    # player × match windows
+    player_match_windows = {}
+    for (mid, cid, pname), grp in df.groupby(['match_id', team_col, 'playerName'], sort=False):
+        mins = grp['timeMin'].dropna()
+        if len(mins) == 0:
+            continue
+        player_match_windows[(mid, cid, pname)] = (mins.min(), mins.max())
+
+    total = len(player_match_windows)
+    for idx, ((mid, cid, pname), (t_on, t_off)) in enumerate(player_match_windows.items()):
+        if idx % 5000 == 0:
+            print(f"    {idx}/{total} player-match windows processed")
+
+        team_grp = match_team_groups.get((mid, cid))
+        if team_grp is None:
+            continue
+
+        team_mins = team_grp['timeMin'].values
+        xt_vals   = team_grp['xt_value'].values
+        vaep_vals = team_grp['vaep_value'].values
+
+        on_mask  = (team_mins >= t_on) & (team_mins <= t_off)
+        off_mask = ~on_mask
+
+        def safe_metrics(mask):
+            xt_v   = xt_vals[mask]; vaep_v = vaep_vals[mask]
+            n_acts = mask.sum()
+            dur    = max(team_mins[mask].max() - team_mins[mask].min(), 1.0) if n_acts > 0 else 1.0
+            return {
+                'n_actions':   int(n_acts),
+                'total_xt':    float(np.nansum(xt_v)),
+                'total_vaep':  float(np.nansum(vaep_v)),
+                'xt_per_min':  float(np.nansum(xt_v) / dur),
+                'vaep_per_min':float(np.nansum(vaep_v) / dur),
+                'duration_min':float(t_off - t_on if mask is on_mask else 90 - (t_off - t_on)),
+            }
+
+        on_stats  = safe_metrics(on_mask)
+        off_stats = safe_metrics(off_mask)
+
+        # infer role: sub if first action after min 30
+        role = 'substitute' if t_on > 30 else 'starter'
+
+        rows.append({
+            'season':         team_grp['season'].iloc[0],
+            'match_id':       mid,
+            'player':         pname,
+            'team':           team_grp['team'].iloc[0] if 'team' in team_grp.columns else cid,
+            'role':           role,
+            'on_from_min':    t_on,
+            'on_to_min':      t_off,
+            'on_n_actions':   on_stats['n_actions'],
+            'on_total_xt':    on_stats['total_xt'],
+            'on_total_vaep':  on_stats['total_vaep'],
+            'on_xt_per_min':  on_stats['xt_per_min'],
+            'on_vaep_per_min':on_stats['vaep_per_min'],
+            'off_n_actions':  off_stats['n_actions'],
+            'off_total_xt':   off_stats['total_xt'],
+            'off_total_vaep': off_stats['total_vaep'],
+            'off_xt_per_min': off_stats['xt_per_min'],
+            'off_vaep_per_min':off_stats['vaep_per_min'],
+            # differentials (on - off), positive = team better with player on
+            'xt_on_per_min':   on_stats['xt_per_min'],
+            'xt_off_per_min':  off_stats['xt_per_min'],
+            'xt_diff':         on_stats['xt_per_min'] - off_stats['xt_per_min'],
+            'vaep_diff':       on_stats['vaep_per_min'] - off_stats['vaep_per_min'],
+        })
+
+    return pd.DataFrame(rows)
 
 
 if __name__ == '__main__':
